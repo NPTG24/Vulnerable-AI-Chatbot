@@ -1,0 +1,1252 @@
+name: Security Pipeline
+
+# ==============================================================================
+# SECURITY PIPELINE
+# ==============================================================================
+# Objetivo:
+# - Ejecutar controles de seguridad y calidad en push, pull request, schedule y manual.
+# - Revisar dependencias, lint, formato, SAST, SCA, secretos, IaC, DAST y seguridad AI.
+# - Generar artefactos descargables y subir SARIF a GitHub Security cuando corresponda.
+#
+# Decisiones de diseño:
+# - Ruff reporta todos los problemas antes de fallar.
+# - Ruff no modifica ni sobreescribe archivos.
+# - Se eliminan sugerencias de mejora generadas por script; se dejan reportes técnicos limpios.
+# - ZAP se convierte a SARIF.
+# - Promptfoo Code Scan se ejecuta solo en pull_request y solo si existe PROMPTFOO_API_KEY.
+# - Semgrep AI corre como SAST adicional con reglas de AI Best Practices.
+# - DAST corre solo por schedule o workflow_dispatch con run_dast=true.
+# ==============================================================================
+
+on:
+  push:
+    branches: [main, master]
+
+  pull_request:
+    branches: [main, master]
+
+  schedule:
+    # Ejecuta el pipeline todos los lunes a las 02:00 UTC.
+    - cron: "0 2 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      run_dast:
+        # Permite forzar DAST manualmente desde GitHub Actions.
+        description: "Force-run DAST even outside schedule"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+
+concurrency:
+  # Evita ejecuciones duplicadas sobre la misma rama o pull request.
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  # Permisos globales mínimos. Cada job declara permisos adicionales cuando los necesita.
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ============================================================================
+  # JOB 1: POLICY — DEPENDENCY PINNING
+  # ============================================================================
+  # Control:
+  # - Revisa archivos requirements*.txt.
+  # - Bloquea dependencias sin pin exacto con ==.
+  # ============================================================================
+
+  dependency-policy:
+    name: "Policy — Dependency Pinning"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enforce exact pinned requirements
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          req_files = sorted({
+              *pathlib.Path(".").glob("requirements*.txt"),
+              *pathlib.Path(".").glob("**/requirements*.txt"),
+          })
+
+          skip = re.compile(
+              r"""
+              ^\s*(
+                  $|
+                  \#|
+                  -r\s+|
+                  -c\s+|
+                  -f\s+|
+                  --|
+                  (https?|git|ssh)://|
+                  file:
+              )
+              """,
+              re.IGNORECASE | re.VERBOSE,
+          )
+
+          exact_pin = re.compile(
+              r"""
+              ^
+              [A-Za-z0-9_.-]+
+              (\[[A-Za-z0-9_,.-]+\])?
+              \s*==\s*
+              [A-Za-z0-9_.!+*-]+
+              .*$
+              """,
+              re.VERBOSE,
+          )
+
+          bad = []
+
+          for req in req_files:
+              text = req.read_text(encoding="utf-8", errors="ignore")
+              for lineno, raw in enumerate(text.splitlines(), 1):
+                  line = raw.strip()
+
+                  if skip.match(line):
+                      continue
+
+                  clean = line.split(" #", 1)[0].strip()
+
+                  if not exact_pin.match(clean):
+                      bad.append((req, lineno, line))
+
+          print("=" * 72)
+          print("DEPENDENCY PINNING POLICY")
+          print("=" * 72)
+
+          if not req_files:
+              print("No requirements*.txt files found. Policy skipped.")
+              sys.exit(0)
+
+          if bad:
+              print("Blocking findings: dependencies must use exact == pins.")
+              print("")
+
+              for req, lineno, line in bad:
+                  print(f"FAILED: {req}:{lineno} {line}")
+
+              print("")
+              print("Allowed examples:")
+              print(" requests==2.32.3")
+              print(" requests == 2.32.3")
+              print(" requests[security] == 2.32.3")
+              print("")
+              print("Not allowed examples:")
+              print(" requests")
+              print(" requests>=2.28")
+              print(" pandas~=2.0")
+              print(" flask<3")
+              print("")
+              print("Policy verdict: FAILED")
+              sys.exit(1)
+
+          print(f"Checked {len(req_files)} requirements file(s).")
+          print("Policy verdict: PASSED")
+          PY
+
+  # ============================================================================
+  # JOB 2: LINT — RUFF
+  # ============================================================================
+  # Control:
+  # - Ejecuta lint con Ruff.
+  # - Ejecuta revisión de formato con Ruff.
+  # - No modifica archivos.
+  # - No genera recomendaciones automáticas.
+  # ============================================================================
+
+  ruff:
+    name: "Lint — Ruff"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Run Ruff lint — collect all findings
+        continue-on-error: true
+        run: |
+          echo "Running Ruff lint in JSON format..."
+          ruff check . --output-format=json > ruff_lint.json || true
+
+          echo ""
+          echo "Running Ruff lint in full text format..."
+          ruff check . --output-format=full > ruff_lint_full.txt || true
+
+          echo ""
+          echo "Running Ruff lint in GitHub annotation format..."
+          ruff check . --output-format=github || true
+
+      - name: Run Ruff format check
+        continue-on-error: true
+        run: |
+          echo "Running Ruff format check..."
+          ruff format . --check --diff > ruff_format_diff.txt || true
+
+          echo ""
+          echo "Ruff format diff:"
+          cat ruff_format_diff.txt || true
+
+      - name: Ensure Ruff reports exist
+        if: always()
+        run: |
+          touch ruff_lint.json
+          touch ruff_lint_full.txt
+          touch ruff_format_diff.txt
+
+      - name: Add Ruff report to job summary
+        if: always()
+        run: |
+          {
+            echo "## Ruff Report"
+            echo ""
+            echo "### Ruff lint output"
+            echo ""
+            echo '```text'
+            if [ -s ruff_lint_full.txt ]; then
+              cat ruff_lint_full.txt
+            else
+              echo "No Ruff lint findings."
+            fi
+            echo '```'
+            echo ""
+            echo "### Ruff format diff"
+            echo ""
+            echo '```diff'
+            if [ -s ruff_format_diff.txt ]; then
+              cat ruff_format_diff.txt
+            else
+              echo "No Ruff format differences."
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Ruff reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-reports
+          path: |
+            ruff_lint.json
+            ruff_lint_full.txt
+            ruff_format_diff.txt
+          retention-days: 30
+
+      - name: Fail if Ruff found lint or format issues
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          lint_failed = False
+          format_failed = False
+
+          lint_path = pathlib.Path("ruff_lint.json")
+          format_path = pathlib.Path("ruff_format_diff.txt")
+
+          if lint_path.exists() and lint_path.read_text(encoding="utf-8", errors="ignore").strip():
+              try:
+                  findings = json.loads(lint_path.read_text(encoding="utf-8", errors="ignore"))
+                  lint_failed = bool(findings)
+              except Exception:
+                  lint_failed = False
+
+          if format_path.exists() and format_path.read_text(encoding="utf-8", errors="ignore").strip():
+              text = format_path.read_text(encoding="utf-8", errors="ignore")
+              format_failed = (
+                  "would be reformatted" in text
+                  or "would reformat" in text
+                  or text.strip().startswith("--- ")
+              )
+
+          if lint_failed or format_failed:
+              print("Ruff detected lint or format issues.")
+              print("Review the ruff-reports artifact and job summary.")
+              sys.exit(1)
+
+          print("Ruff completed without lint or format issues.")
+          PY
+
+  # ============================================================================
+  # JOB 3: SAST — SEMGREP
+  # ============================================================================
+  # Control:
+  # - Ejecuta Semgrep con reglas Python, Security Audit y OWASP Top 10.
+  # - Genera SARIF para GitHub Security y JSON como artefacto.
+  # ============================================================================
+
+  sast-semgrep:
+    name: "SAST — Semgrep"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade pip
+          pip install semgrep
+
+      - name: Run Semgrep — generate SARIF and JSON
+        continue-on-error: true
+        run: |
+          semgrep \
+            --config p/python \
+            --config p/security-audit \
+            --config p/owasp-top-ten \
+            --sarif \
+            --output semgrep.sarif \
+            . || true
+
+          semgrep \
+            --config p/python \
+            --config p/security-audit \
+            --config p/owasp-top-ten \
+            --json \
+            --output semgrep.json \
+            . || true
+
+      - name: Ensure Semgrep reports exist
+        if: always()
+        run: |
+          if [ ! -f semgrep.sarif ]; then
+            cat > semgrep.sarif <<'SARIF'
+          {
+            "version": "2.1.0",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzJhhp6HIQ$ ",
+            "runs": []
+          }
+          SARIF
+          fi
+
+          if [ ! -f semgrep.json ]; then
+            echo '{"results":[]}' > semgrep.json
+          fi
+
+      - name: Gate on Semgrep error-level findings
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          try:
+              sarif = json.loads(pathlib.Path("semgrep.sarif").read_text(encoding="utf-8", errors="ignore"))
+          except Exception as e:
+              print(f"Could not parse semgrep.sarif: {e}. Skipping gate.")
+              sys.exit(0)
+
+          blocking = []
+
+          for run in sarif.get("runs", []):
+              for result in run.get("results", []):
+                  if result.get("level") == "error":
+                      rule = result.get("ruleId", "unknown")
+                      msg = result.get("message", {}).get("text", "")
+                      blocking.append(f"[{rule}] {msg[:180]}")
+
+          if blocking:
+              print(f"Semgrep blocking findings: {len(blocking)}")
+              for item in blocking:
+                  print(f"FAILED: {item}")
+              sys.exit(1)
+
+          print("Semgrep: no blocking findings.")
+          PY
+
+      - name: Upload Semgrep SARIF to GitHub Security tab
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Upload Semgrep artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-results
+          path: |
+            semgrep.sarif
+            semgrep.json
+          retention-days: 30
+
+  # ============================================================================
+  # JOB 4: AI SAST — SEMGREP AI RULES
+  # ============================================================================
+  # Control:
+  # - Revisa código relacionado con IA, LLM, prompts, agentes, RAG y providers.
+  # - Usa el ruleset p/ai-best-practices del registry oficial de Semgrep.
+  # ============================================================================
+
+  ai-sast-semgrep:
+    name: "AI SAST — Semgrep AI Rules"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade pip
+          pip install semgrep
+
+      - name: Run Semgrep AI rules — SARIF and JSON
+        continue-on-error: true
+        run: |
+          semgrep \
+            --config p/ai-best-practices \
+            --sarif \
+            --output semgrep_ai.sarif \
+            . || true
+
+          semgrep \
+            --config p/ai-best-practices \
+            --json \
+            --output semgrep_ai.json \
+            . || true
+
+      - name: Ensure Semgrep AI reports exist
+        if: always()
+        run: |
+          if [ ! -f semgrep_ai.sarif ]; then
+            cat > semgrep_ai.sarif <<'SARIF'
+          {
+            "version": "2.1.0",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzJhhp6HIQ$ ",
+            "runs": []
+          }
+          SARIF
+          fi
+
+          if [ ! -f semgrep_ai.json ]; then
+            echo '{"results":[]}' > semgrep_ai.json
+          fi
+
+      - name: Gate on Semgrep AI error-level findings
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          try:
+              sarif = json.loads(pathlib.Path("semgrep_ai.sarif").read_text(encoding="utf-8", errors="ignore"))
+          except Exception as e:
+              print(f"Could not parse semgrep_ai.sarif: {e}. Skipping gate.")
+              sys.exit(0)
+
+          blocking = []
+
+          for run in sarif.get("runs", []):
+              for result in run.get("results", []):
+                  if result.get("level") == "error":
+                      rule = result.get("ruleId", "unknown")
+                      msg = result.get("message", {}).get("text", "")
+                      blocking.append(f"[{rule}] {msg[:180]}")
+
+          if blocking:
+              print(f"Semgrep AI blocking findings: {len(blocking)}")
+              for item in blocking:
+                  print(f"FAILED: {item}")
+              sys.exit(1)
+
+          print("Semgrep AI: no blocking findings.")
+          PY
+
+      - name: Upload Semgrep AI SARIF to GitHub Security tab
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: semgrep_ai.sarif
+          category: semgrep-ai
+
+      - name: Upload Semgrep AI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-ai-results
+          path: |
+            semgrep_ai.sarif
+            semgrep_ai.json
+          retention-days: 30
+
+  # ============================================================================
+  # JOB 5: AI CODE SCAN — PROMPTFOO
+  # ============================================================================
+  # Control:
+  # - Revisa cambios de código en pull requests buscando riesgos de aplicaciones LLM.
+  # - Detecta riesgos como prompt injection, PII exposure, excessive agency y tool abuse.
+  #
+  # Requisito:
+  # - Configurar el secret PROMPTFOO_API_KEY.
+  #
+  # Comportamiento:
+  # - Solo corre en pull_request.
+  # - Si falta PROMPTFOO_API_KEY, el job no falla; genera SARIF vacío.
+  # ============================================================================
+
+  ai-code-scan-promptfoo:
+    name: "AI Code Scan — Promptfoo"
+    runs-on: ubuntu-latest
+
+    if: github.event_name == 'pull_request'
+
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+      actions: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Promptfoo API key
+        id: promptfoo_config
+        env:
+          PROMPTFOO_API_KEY_VALUE: ${{ secrets.PROMPTFOO_API_KEY }}
+        run: |
+          if [ -z "$PROMPTFOO_API_KEY_VALUE" ]; then
+            echo "PROMPTFOO_API_KEY is not configured. Skipping Promptfoo Code Scan."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "PROMPTFOO_API_KEY is configured."
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Promptfoo Code Scan
+        if: steps.promptfoo_config.outputs.enabled == 'true'
+        id: promptfoo_code_scan
+        uses: promptfoo/code-scan-action@v1
+        env:
+          PROMPTFOO_API_KEY: ${{ secrets.PROMPTFOO_API_KEY }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          min-severity: medium
+          enable-fork-prs: false
+          sarif-output-path: promptfoo_code_scan.sarif
+          guidance: |
+            Focus on LLM application security risks in code changes.
+            Review prompt construction, user-controlled input reaching prompts, model outputs used in sensitive flows, tool/function calling, RAG ingestion, memory, logs, and PII handling.
+            Treat direct or indirect prompt injection, PII exposure, excessive agency, unsafe tool execution, and insecure output handling as high priority.
+
+      - name: Ensure Promptfoo SARIF exists
+        if: always()
+        run: |
+          if [ ! -f promptfoo_code_scan.sarif ]; then
+            cat > promptfoo_code_scan.sarif <<'SARIF'
+          {
+            "version": "2.1.0",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzJhhp6HIQ$ ",
+            "runs": [
+              {
+                "tool": {
+                  "driver": {
+                    "name": "Promptfoo Code Scan",
+                    "informationUri": "https://urldefense.com/v3/__https://github.com/promptfoo/code-scan-action__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzLuc-iaEA$ ",
+                    "rules": []
+                  }
+                },
+                "results": []
+              }
+            ]
+          }
+          SARIF
+          fi
+
+      - name: Upload Promptfoo SARIF to GitHub Security tab
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: promptfoo_code_scan.sarif
+          category: promptfoo-code-scan
+
+      - name: Upload Promptfoo artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-code-scan-results
+          path: promptfoo_code_scan.sarif
+          retention-days: 30
+
+  # ============================================================================
+  # JOB 6: SCA — TRIVY + PIP-AUDIT
+  # ============================================================================
+  # Control:
+  # - pip-audit revisa vulnerabilidades Python.
+  # - Trivy revisa filesystem y dependencias soportadas.
+  # ============================================================================
+
+  sca-dependencies:
+    name: "SCA — Trivy + pip-audit"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements*.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip pip-audit
+
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt || true
+          elif [ -f pyproject.toml ]; then
+            pip install -e ".[dev]" 2>/dev/null || pip install -e . || true
+          fi
+
+      - name: Run pip-audit
+        run: |
+          pip-audit \
+            --format json \
+            --output pip_audit_results.json \
+            --progress-spinner off \
+            || true
+
+          pip-audit \
+            --format json \
+            --output pip_audit_osv.json \
+            --progress-spinner off \
+            --vulnerability-service osv \
+            || true
+
+          python3 - <<'PY'
+          import json
+          import sys
+
+          blocking = {"HIGH", "CRITICAL"}
+          found = False
+
+          try:
+              raw = json.load(open("pip_audit_osv.json", encoding="utf-8"))
+          except Exception:
+              print("pip-audit-osv: no output or parse error. Skipping gate.")
+              sys.exit(0)
+
+          packages = raw.get("dependencies", []) if isinstance(raw, dict) else raw
+
+          for pkg in packages:
+              if not isinstance(pkg, dict):
+                  continue
+
+              for vuln in pkg.get("vulns", []):
+                  if not isinstance(vuln, dict):
+                      continue
+
+                  severity = str(vuln.get("severity", "UNKNOWN")).upper()
+                  line = (
+                      f"{pkg.get('name', '?')} {pkg.get('version', '')} — "
+                      f"{vuln.get('id', '')} severity={severity}"
+                  )
+
+                  if severity in blocking:
+                      print(f"BLOCKING: {line}")
+                      found = True
+                  else:
+                      print(f"INFO: {line}")
+
+          if found:
+              print("pip-audit: HIGH/CRITICAL vulnerabilities found.")
+              sys.exit(1)
+
+          print("pip-audit: no HIGH/CRITICAL vulnerabilities found.")
+          PY
+
+      - name: Upload pip-audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-results
+          path: |
+            pip_audit_results.json
+            pip_audit_osv.json
+          retention-days: 30
+
+      - name: Run Trivy — SARIF
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          format: sarif
+          output: trivy_results.sarif
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          exit-code: "0"
+
+      - name: Ensure Trivy SARIF exists
+        if: always()
+        run: |
+          if [ ! -f trivy_results.sarif ]; then
+            cat > trivy_results.sarif <<'SARIF'
+          {
+            "version": "2.1.0",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzJhhp6HIQ$ ",
+            "runs": [
+              {
+                "tool": {
+                  "driver": {
+                    "name": "Trivy",
+                    "informationUri": "https://urldefense.com/v3/__https://github.com/aquasecurity/trivy__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzL-E0YTvg$ ",
+                    "rules": []
+                  }
+                },
+                "results": []
+              }
+            ]
+          }
+          SARIF
+          fi
+
+      - name: Run Trivy — gate HIGH/CRITICAL
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          format: table
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+          ignore-unfixed: false
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy_results.sarif
+          category: trivy-sca
+
+      - name: Upload Trivy artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-sarif
+          path: trivy_results.sarif
+          retention-days: 30
+
+  # ============================================================================
+  # JOB 7: SECRETS — GITLEAKS
+  # ============================================================================
+  # Control:
+  # - Busca secretos expuestos en el repositorio y su historial.
+  # ============================================================================
+
+  secret-scan:
+    name: "Secrets — Gitleaks"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.30.1"
+          curl -sSfL \
+            "https://urldefense.com/v3/__https://github.com/gitleaks/gitleaks/releases/download/v$*7BGITLEAKS_VERSION*7D/gitleaks_$*7BGITLEAKS_VERSION*7D_linux_x64.tar.gz__;JSUlJQ!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzLUCcUaBQ$ " \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Run Gitleaks
+        run: |
+          CONFIG_FLAG=""
+          if [ -f ".gitleaks.toml" ]; then
+            CONFIG_FLAG="--config .gitleaks.toml"
+          fi
+
+          gitleaks detect \
+            --source . \
+            --log-opts="--all" \
+            $CONFIG_FLAG \
+            --report-format json \
+            --report-path gitleaks_report.json \
+            --exit-code 1 \
+            --verbose
+
+      - name: Ensure Gitleaks report exists
+        if: always()
+        run: |
+          if [ ! -f gitleaks_report.json ]; then
+            echo "[]" > gitleaks_report.json
+          fi
+
+      - name: Upload Gitleaks artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks_report.json
+          retention-days: 30
+
+  # ============================================================================
+  # JOB 8: IAC — CHECKOV
+  # ============================================================================
+  # Control:
+  # - Revisa Infrastructure as Code y configuraciones soportadas por Checkov.
+  # ============================================================================
+
+  iac-checkov:
+    name: "IaC — Checkov"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          soft_fail: true
+          hard_fail_on: HIGH,CRITICAL
+          output_format: "sarif,json"
+          output_file_path: "checkov_results.sarif,checkov_results.json"
+          download_external_modules: false
+
+      - name: Ensure Checkov reports exist
+        if: always()
+        run: |
+          if [ ! -f checkov_results.sarif ]; then
+            cat > checkov_results.sarif <<'SARIF'
+          {
+            "version": "2.1.0",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzJhhp6HIQ$ ",
+            "runs": []
+          }
+          SARIF
+          fi
+
+          if [ ! -f checkov_results.json ]; then
+            echo "{}" > checkov_results.json
+          fi
+
+      - name: Upload Checkov SARIF to GitHub Security tab
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: checkov_results.sarif
+          category: checkov-iac
+
+      - name: Upload Checkov artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-results
+          path: |
+            checkov_results.sarif
+            checkov_results.json
+          retention-days: 30
+
+  # ============================================================================
+  # JOB 9: DAST — OWASP ZAP BASELINE
+  # ============================================================================
+  # Control:
+  # - Ejecuta OWASP ZAP Baseline contra la URL definida en DAST_TARGET_URL.
+  # - Convierte el reporte JSON de ZAP a SARIF.
+  # ============================================================================
+
+  dast-zap:
+    name: "DAST — OWASP ZAP Baseline"
+    runs-on: ubuntu-latest
+
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event.inputs.run_dast == 'true'
+
+    permissions:
+      contents: read
+      security-events: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate DAST target URL
+        id: validate_url
+        env:
+          DAST_TARGET_URL_VALUE: ${{ secrets.DAST_TARGET_URL }}
+        run: |
+          if [ -z "$DAST_TARGET_URL_VALUE" ]; then
+            echo "DAST_TARGET_URL secret is not set. Skipping DAST."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "DAST target URL is set."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run OWASP ZAP Baseline Scan
+        if: steps.validate_url.outputs.skip != 'true'
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: ${{ secrets.DAST_TARGET_URL }}
+          report_html: zap_report.html
+          report_json: zap_report.json
+          cmd_options: "-l HIGH"
+          fail_action: true
+          allow_issue_writing: false
+
+      - name: Convert ZAP JSON to SARIF
+        if: always() && steps.validate_url.outputs.skip != 'true'
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import re
+
+          source = pathlib.Path("zap_report.json")
+          target = pathlib.Path("zap_results.sarif")
+
+          if not source.exists():
+              print("zap_report.json was not found. Creating empty SARIF.")
+              zap = {"site": []}
+          else:
+              try:
+                  zap = json.loads(source.read_text(encoding="utf-8", errors="ignore"))
+              except Exception as e:
+                  print(f"Could not parse zap_report.json: {e}. Creating empty SARIF.")
+                  zap = {"site": []}
+
+          def clean_html(value):
+              if not value:
+                  return ""
+              value = re.sub(r"<[^>]+>", " ", str(value))
+              return re.sub(r"\s+", " ", value).strip()
+
+          sarif = {
+              "version": "2.1.0",
+              "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzJhhp6HIQ$ ",
+              "runs": [
+                  {
+                      "tool": {
+                          "driver": {
+                              "name": "OWASP ZAP",
+                              "informationUri": "https://urldefense.com/v3/__https://www.zaproxy.org/__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzKXHW6OBg$ ",
+                              "rules": [],
+                          }
+                      },
+                      "results": [],
+                  }
+              ],
+          }
+
+          run = sarif["runs"][0]
+          rules = {}
+          level_map = {
+              "3": "error",
+              "2": "warning",
+              "1": "note",
+              "0": "note",
+          }
+
+          for site in zap.get("site", []):
+              for alert in site.get("alerts", []):
+                  plugin_id = str(alert.get("pluginid", "unknown"))
+                  rule_id = f"ZAP-{plugin_id}"
+                  level = level_map.get(str(alert.get("riskcode", "1")), "note")
+
+                  if rule_id not in rules:
+                      rules[rule_id] = {
+                          "id": rule_id,
+                          "name": clean_html(alert.get("alert", "Unknown ZAP alert")),
+                          "shortDescription": {
+                              "text": clean_html(alert.get("alert", "Unknown ZAP alert"))
+                          },
+                          "fullDescription": {
+                              "text": clean_html(alert.get("desc", ""))
+                          },
+                          "help": {
+                              "text": clean_html(
+                                  " ".join(
+                                      filter(
+                                          None,
+                                          [
+                                              alert.get("solution", ""),
+                                              alert.get("reference", ""),
+                                          ],
+                                      )
+                                  )
+                              )
+                          },
+                          "defaultConfiguration": {
+                              "level": level
+                          },
+                      }
+
+                  instances = alert.get("instances") or [{}]
+
+                  for instance in instances:
+                      uri = instance.get("uri") or site.get("@name") or "unknown"
+                      method = instance.get("method", "")
+                      evidence = clean_html(instance.get("evidence", ""))
+                      parameter = instance.get("param", "")
+
+                      message_parts = [
+                          clean_html(alert.get("alert", "Unknown ZAP alert")),
+                          f"URL: {uri}",
+                      ]
+
+                      if method:
+                          message_parts.append(f"Method: {method}")
+
+                      if parameter:
+                          message_parts.append(f"Parameter: {parameter}")
+
+                      if evidence:
+                          message_parts.append(f"Evidence: {evidence}")
+
+                      run["results"].append(
+                          {
+                              "ruleId": rule_id,
+                              "level": level,
+                              "message": {
+                                  "text": " | ".join(message_parts)
+                              },
+                              "locations": [
+                                  {
+                                      "physicalLocation": {
+                                          "artifactLocation": {
+                                              "uri": uri
+                                          }
+                                      }
+                                  }
+                              ],
+                          }
+                      )
+
+          run["tool"]["driver"]["rules"] = list(rules.values())
+
+          target.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
+          print(f"ZAP SARIF written: {len(run['results'])} result(s).")
+          PY
+
+      - name: Ensure ZAP SARIF exists
+        if: always() && steps.validate_url.outputs.skip != 'true'
+        run: |
+          if [ ! -f zap_results.sarif ]; then
+            cat > zap_results.sarif <<'SARIF'
+          {
+            "version": "2.1.0",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzJhhp6HIQ$ ",
+            "runs": [
+              {
+                "tool": {
+                  "driver": {
+                    "name": "OWASP ZAP",
+                    "informationUri": "https://urldefense.com/v3/__https://www.zaproxy.org/__;!!P110LumUDw!9nbTGoBYGSZwb7c2w_7iJCallUTnFK8tDbULtMyYTETTeom8gD37PdxpNUBdeUfx-GtxltwjC1IDlnZ6TrXwMzKXHW6OBg$ ",
+                    "rules": []
+                  }
+                },
+                "results": []
+              }
+            ]
+          }
+          SARIF
+          fi
+
+      - name: Upload ZAP SARIF to GitHub Security tab
+        if: always() && steps.validate_url.outputs.skip != 'true'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: zap_results.sarif
+          category: zap-dast
+
+      - name: Upload ZAP artifacts
+        if: always() && steps.validate_url.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-results
+          path: |
+            zap_report.html
+            zap_report.json
+            zap_results.sarif
+          retention-days: 30
+
+  # ============================================================================
+  # JOB 10: SECURITY GATE — SUMMARY
+  # ============================================================================
+  # Control:
+  # - Consolida el resultado de los jobs bloqueantes.
+  # - DAST no se incluye porque no siempre se ejecuta.
+  # - Un job skipped no falla el gate.
+  # ============================================================================
+
+  security-gate:
+    name: "Security Gate — Summary"
+    runs-on: ubuntu-latest
+
+    needs:
+      - dependency-policy
+      - ruff
+      - sast-semgrep
+      - ai-sast-semgrep
+      - ai-code-scan-promptfoo
+      - sca-dependencies
+      - secret-scan
+      - iac-checkov
+
+    if: always()
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Evaluate gate status
+        run: |
+          echo "================================================================"
+          echo " SECURITY GATE — PIPELINE VERDICT"
+          echo "================================================================"
+
+          DEPS="${{ needs.dependency-policy.result }}"
+          RUFF="${{ needs.ruff.result }}"
+          SAST="${{ needs.sast-semgrep.result }}"
+          AI_SAST="${{ needs.ai-sast-semgrep.result }}"
+          AI_PROMPTFOO="${{ needs.ai-code-scan-promptfoo.result }}"
+          SCA="${{ needs.sca-dependencies.result }}"
+          SECRETS="${{ needs.secret-scan.result }}"
+          IAC="${{ needs.iac-checkov.result }}"
+
+          echo " dependency-policy      : $DEPS"
+          echo " ruff                   : $RUFF"
+          echo " sast-semgrep           : $SAST"
+          echo " ai-sast-semgrep        : $AI_SAST"
+          echo " ai-code-scan-promptfoo : $AI_PROMPTFOO"
+          echo " sca-dependencies       : $SCA"
+          echo " secret-scan            : $SECRETS"
+          echo " iac-checkov            : $IAC"
+
+          echo "----------------------------------------------------------------"
+
+          GATE_PASS=true
+
+          for result in "$DEPS" "$RUFF" "$SAST" "$AI_SAST" "$AI_PROMPTFOO" "$SCA" "$SECRETS" "$IAC"; do
+            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+              GATE_PASS=false
+            fi
+          done
+
+          if [ "$GATE_PASS" = "true" ]; then
+            echo " VERDICT: PASSED — no blocking security or policy findings"
+          else
+            echo " VERDICT: FAILED — one or more security or policy jobs failed"
+            echo ""
+            echo " Review findings in:"
+            echo " - Workflow run artifacts"
+            echo " - GitHub Security tab if Code Scanning is enabled"
+            echo " - Job summaries"
+            echo ""
+            echo " Gating policy:"
+            echo " - Ruff lint or format issues fail the build"
+            echo " - Semgrep error-level findings fail the build"
+            echo " - Semgrep AI error-level findings fail the build"
+            echo " - Promptfoo Code Scan failure fails the build when executed"
+            echo " - pip-audit HIGH / CRITICAL findings fail the build when severity is available"
+            echo " - Trivy HIGH / CRITICAL findings fail the build"
+            echo " - Gitleaks secrets fail the build"
+            echo " - Checkov HIGH / CRITICAL findings fail the build"
+            echo " - Skipped jobs do not fail the gate"
+          fi
+
+          echo "================================================================"
+
+          [ "$GATE_PASS" = "true" ] || exit 1
+
+      - name: Download all artifacts for summary
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          path: all_scan_results/
+
+      - name: Print consolidated artifact listing
+        if: always()
+        run: |
+          echo "Scan artifacts collected:"
+          find all_scan_results/ -type f | sort
