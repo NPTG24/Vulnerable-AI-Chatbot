@@ -8,29 +8,21 @@ name: Security Pipeline
 # - Ningún scanner detiene el pipeline.
 # - La única X roja aparece en el job final: Security Report.
 # - El reporte final centraliza CRITICAL, HIGH, MEDIUM, LOW, INFO y UNKNOWN.
-# - Todo el resumen queda en español.
+# - El reporte se guarda como artifact de GitHub y opcionalmente se commitea al repo.
 #
-# Cobertura:
-# - Dependency pinning
-# - Ruff lint y format
-# - Semgrep SAST
-# - Semgrep AI / LLM / Agents
-# - Promptfoo Code Scan
-# - Promptfoo Red Team
-# - Garak LLM vulnerability scanner
-# - LLM Guard prompt injection corpus
-# - pip-audit
-# - Trivy
-# - Gitleaks
-# - Checkov
-# - OWASP ZAP DAST
+# Correcciones:
+# - No se usa cat directo sobre nombres tipo https://urldefense.com/v3/__http://archivo.md__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOvkzzSstQ$  en el Step Summary para evitar
+#   que entornos empresariales reescriban rutas como URL Defense.
+# - El resumen se agrega al Step Summary con Python, leyendo el archivo local.
+# - Los reportes se guardan con nombres .txt/.json/.html y dentro de security-reports/.
+# - Gitleaks se ejecuta por Docker, sin curl externo manual ni tar sobre URL.
+# - Todos los scanners continúan, aunque fallen. El único gate final es Security Report.
 #
-# Correcciones incorporadas:
-# - Gitleaks ya no se instala por curl/tar, para evitar errores de URL mal formada.
-# - Se usa gitleaks/gitleaks-action.
-# - Todos los scanners usan continue-on-error o equivalente.
-# - Todos generan artefactos, aunque se omitan por falta de configuración.
-# - El gate final decide si falla o no, según el threshold.
+# Requisitos opcionales:
+# - DAST_TARGET_URL: requerido para OWASP ZAP.
+# - PROMPTFOO_API_KEY: requerido para Promptfoo Code Scan.
+# - promptfooconfig.yaml/yml o promptfoo.yaml/yml: requerido para Promptfoo Red Team.
+# - OPENAI_API_KEY o variables GARAK_MODEL_TYPE/GARAK_MODEL_NAME: requerido para Garak dinámico.
 # ==============================================================================
 
 on:
@@ -41,7 +33,6 @@ on:
     branches: [main, master]
 
   schedule:
-    # Ejecuta el pipeline todos los lunes a las 02:00 UTC.
     - cron: "0 2 * * 1"
 
   workflow_dispatch:
@@ -60,6 +51,13 @@ on:
         type: choice
         options: ["critical", "high", "medium", "low", "never"]
 
+      commit_report:
+        description: "Commit final report into repository"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
 concurrency:
   group: security-${{ github.ref }}
   cancel-in-progress: true
@@ -76,14 +74,10 @@ jobs:
   # ============================================================================
   # JOB 1: POLICY — DEPENDENCY PINNING
   # ============================================================================
-  # Reporta dependencias Python sin pin exacto en requirements*.txt.
-  # Este job no falla; el reporte final centralizado decide el verdict.
-  # ============================================================================
 
   dependency-policy:
     name: "Policy — Dependency Pinning"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
 
@@ -139,7 +133,6 @@ jobs:
               text = req.read_text(encoding="utf-8", errors="ignore")
               for lineno, raw in enumerate(text.splitlines(), 1):
                   line = raw.strip()
-
                   if skip.match(line):
                       continue
 
@@ -182,14 +175,10 @@ jobs:
   # ============================================================================
   # JOB 2: LINT — RUFF
   # ============================================================================
-  # Ejecuta Ruff lint y format check.
-  # No modifica archivos y no detiene el pipeline.
-  # ============================================================================
 
   ruff:
     name: "Lint — Ruff"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
 
@@ -236,13 +225,10 @@ jobs:
   # ============================================================================
   # JOB 3: SAST — SEMGREP
   # ============================================================================
-  # SAST general con reglas Python, security-audit y OWASP Top 10.
-  # ============================================================================
 
   sast-semgrep:
     name: "SAST — Semgrep"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       security-events: write
@@ -290,7 +276,7 @@ jobs:
             cat > semgrep.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAd_Nhovw$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
             "runs": []
           }
           SARIF
@@ -321,14 +307,19 @@ jobs:
   # ============================================================================
   # JOB 4: AI SAST — SEMGREP AI / LLM / AGENTS
   # ============================================================================
-  # Reglas orientadas a código con LLM, agentes, prompts, RAG, tools y outputs.
-  # Incluye reglas oficiales cuando estén disponibles y reglas locales custom.
+  # Incluye reglas locales para detectar posibles riesgos:
+  # - Prompt injection
+  # - System prompt leakage
+  # - Tool abuse
+  # - Ejecución de comandos en agentes
+  # - eval/exec sobre salidas no confiables
+  # - RAG poisoning
+  # - Insecure output handling
   # ============================================================================
 
   ai-sast-semgrep:
     name: "AI SAST — Semgrep AI LLM Agents"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       security-events: write
@@ -371,7 +362,7 @@ jobs:
                     - pattern: |
                         $PROMPT = "...".format($USER)
                     - pattern: |
-                        $PROMPT = "..."+$USER
+                        $PROMPT = "..." + $USER
                     - pattern: |
                         $PROMPT += $USER
                 - metavariable-regex:
@@ -381,21 +372,20 @@ jobs:
             - id: python-llm-system-prompt-hardcoded
               languages: [python]
               severity: INFO
-              message: "Posible system prompt hardcodeado. Revisar exposición, logs y posibilidad de fuga de instrucciones internas."
+              message: "Posible system prompt hardcodeado. Revisar exposición, logs y fuga de instrucciones internas."
               metadata:
                 category: security
                 technology: [llm, ai, prompt-leakage]
                 confidence: low
-              patterns:
-                - pattern-either:
-                    - pattern: |
-                        {"role": "system", "content": "..."}
-                    - pattern: |
-                        {"role": 'system', "content": "..."}
-                    - pattern: |
-                        {"role": "system", "content": $CONTENT}
-                    - pattern: |
-                        {"role": 'system', "content": $CONTENT}
+              pattern-either:
+                - pattern: |
+                    {"role": "system", "content": "..."}
+                - pattern: |
+                    {"role": 'system', "content": "..."}
+                - pattern: |
+                    {"role": "system", "content": $CONTENT}
+                - pattern: |
+                    {"role": 'system', "content": $CONTENT}
 
             - id: python-llm-tool-dangerous-shell
               languages: [python]
@@ -426,21 +416,20 @@ jobs:
             - id: python-llm-output-used-in-sql
               languages: [python]
               severity: WARNING
-              message: "Posible insecure output handling: contenido variable usado en consulta SQL. Revisar SQL injection y uso de parámetros."
+              message: "Posible insecure output handling: contenido variable usado en SQL. Revisar SQL injection y parametrización."
               metadata:
                 category: security
                 technology: [llm, ai, insecure-output-handling, sql-injection]
                 confidence: medium
-              patterns:
-                - pattern-either:
-                    - pattern: $CUR.execute(f"...{$X}...")
-                    - pattern: $CUR.execute("...".format($X))
-                    - pattern: $CUR.execute("..." + $X)
+              pattern-either:
+                - pattern: $CUR.execute(f"...{$X}...")
+                - pattern: $CUR.execute("...".format($X))
+                - pattern: $CUR.execute("..." + $X)
 
             - id: python-llm-vectorstore-ingest-untrusted
               languages: [python]
               severity: WARNING
-              message: "Posible riesgo RAG poisoning: documentos o texto no confiable son cargados a vectorstore/index. Validar origen, sanitización y segregación."
+              message: "Posible riesgo RAG poisoning: documentos o texto no confiable cargados a vectorstore/index."
               metadata:
                 category: security
                 technology: [llm, ai, rag, rag-poisoning]
@@ -454,7 +443,7 @@ jobs:
             - id: javascript-llm-user-input-in-prompt
               languages: [javascript, typescript]
               severity: WARNING
-              message: "Posible riesgo AI/LLM: input controlado por usuario usado en prompt. Revisar prompt injection y fuga de datos."
+              message: "Posible riesgo AI/LLM: input controlado por usuario usado en prompt. Revisar prompt injection."
               metadata:
                 category: security
                 technology: [llm, ai, prompt-injection]
@@ -474,7 +463,7 @@ jobs:
             - id: javascript-llm-system-prompt-hardcoded
               languages: [javascript, typescript]
               severity: INFO
-              message: "Posible system prompt hardcodeado. Revisar exposición, logs y posibilidad de fuga."
+              message: "Posible system prompt hardcodeado. Revisar exposición, logs y fuga de instrucciones."
               metadata:
                 category: security
                 technology: [llm, ai, prompt-leakage]
@@ -542,7 +531,7 @@ jobs:
             cat > semgrep_ai.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAd_Nhovw$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
             "runs": []
           }
           SARIF
@@ -573,14 +562,10 @@ jobs:
   # ============================================================================
   # JOB 5: AI CODE SCAN — PROMPTFOO
   # ============================================================================
-  # Promptfoo Code Scan para riesgos de código en apps LLM.
-  # Se intenta ejecutar en pull_request. Si falta PROMPTFOO_API_KEY, queda como skipped.
-  # ============================================================================
 
   ai-code-scan-promptfoo:
     name: "AI Code Scan — Promptfoo"
     runs-on: ubuntu-latest
-
     if: github.event_name == 'pull_request'
 
     permissions:
@@ -602,10 +587,8 @@ jobs:
           PROMPTFOO_API_KEY_VALUE: ${{ secrets.PROMPTFOO_API_KEY }}
         run: |
           if [ -z "$PROMPTFOO_API_KEY_VALUE" ]; then
-            echo "PROMPTFOO_API_KEY is not configured. Promptfoo Code Scan will be marked as skipped."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else
-            echo "PROMPTFOO_API_KEY is configured."
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -645,19 +628,8 @@ jobs:
             cat > promptfoo_code_scan.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAd_Nhovw$ ",
-            "runs": [
-              {
-                "tool": {
-                  "driver": {
-                    "name": "Promptfoo Code Scan",
-                    "informationUri": "https://urldefense.com/v3/__https://github.com/promptfoo/code-scan-action__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yBn2_-BDQ$ ",
-                    "rules": []
-                  }
-                },
-                "results": []
-              }
-            ]
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
+            "runs": []
           }
           SARIF
           fi
@@ -683,14 +655,10 @@ jobs:
   # ============================================================================
   # JOB 6: AI RED TEAM — PROMPTFOO
   # ============================================================================
-  # Ejecuta red teaming si existe archivo promptfooconfig.yaml/yml o promptfoo.yaml/yml.
-  # Detecta prompt injection, jailbreaks, PII exposure, data exfiltration y tool abuse.
-  # ============================================================================
 
   ai-redteam-promptfoo:
     name: "AI Red Team — Promptfoo"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
 
@@ -719,8 +687,6 @@ jobs:
                 break
               fi
             done
-
-            echo "Promptfoo config found: $CONFIG_FILE"
 
             npx --yes promptfoo@latest redteam run \
               -c "$CONFIG_FILE" \
@@ -755,14 +721,10 @@ jobs:
   # ============================================================================
   # JOB 7: AI VULNERABILITY SCAN — GARAK
   # ============================================================================
-  # Garak para vulnerabilidades de LLM:
-  # prompt injection, jailbreaks, leakage, dan, encoding attacks, continuation.
-  # ============================================================================
 
   ai-garak:
     name: "AI Vulnerability Scan — Garak"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
 
@@ -820,14 +782,10 @@ jobs:
   # ============================================================================
   # JOB 8: AI INPUT SCAN — LLM GUARD
   # ============================================================================
-  # Ejecuta corpus local de prompt injection con LLM Guard y fallback regex.
-  # Permite detectar payloads típicos de prompt injection y tool abuse.
-  # ============================================================================
 
   ai-llm-guard:
     name: "AI Input Scan — LLM Guard"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
 
@@ -956,13 +914,10 @@ jobs:
   # ============================================================================
   # JOB 9: SCA — TRIVY + PIP-AUDIT
   # ============================================================================
-  # Revisión de vulnerabilidades en dependencias.
-  # ============================================================================
 
   sca-dependencies:
     name: "SCA — Trivy + pip-audit"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       security-events: write
@@ -1048,7 +1003,7 @@ jobs:
             cat > trivy_results.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAd_Nhovw$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
             "runs": []
           }
           SARIF
@@ -1073,17 +1028,21 @@ jobs:
   # ============================================================================
   # JOB 10: SECRETS — GITLEAKS
   # ============================================================================
-  # Busca secretos expuestos.
-  # Corrección: usa Action oficial para evitar error de curl URL malformed.
+  # Corrección:
+  # - Se usa contenedor oficial de Gitleaks.
+  # - No se usa curl manual.
+  # - No se descarga ni desempaqueta tar.gz desde una URL.
   # ============================================================================
 
   secret-scan:
     name: "Secrets — Gitleaks"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       pull-requests: read
+
+    container:
+      image: zricethezav/gitleaks:v8.30.1
 
     steps:
       - name: Checkout repository
@@ -1093,35 +1052,25 @@ jobs:
 
       - name: Run Gitleaks
         continue-on-error: true
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_COMMENTS: "false"
-          GITLEAKS_ENABLE_SUMMARY: "false"
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
-          GITLEAKS_VERSION: "8.30.1"
-
-      - name: Run Gitleaks JSON report fallback
-        continue-on-error: true
+        shell: sh
         run: |
-          if command -v gitleaks >/dev/null 2>&1; then
-            CONFIG_FLAG=""
-            if [ -f ".gitleaks.toml" ]; then
-              CONFIG_FLAG="--config .gitleaks.toml"
-            fi
-
-            gitleaks detect \
-              --source . \
-              --log-opts="--all" \
-              $CONFIG_FLAG \
-              --report-format json \
-              --report-path gitleaks_report.json \
-              --exit-code 0 \
-              --verbose || true
+          CONFIG_FLAG=""
+          if [ -f ".gitleaks.toml" ]; then
+            CONFIG_FLAG="--config .gitleaks.toml"
           fi
+
+          gitleaks detect \
+            --source . \
+            --log-opts="--all" \
+            $CONFIG_FLAG \
+            --report-format json \
+            --report-path gitleaks_report.json \
+            --exit-code 0 \
+            --verbose || true
 
       - name: Ensure Gitleaks report exists
         if: always()
+        shell: sh
         run: |
           if [ ! -f gitleaks_report.json ]; then
             echo "[]" > gitleaks_report.json
@@ -1138,13 +1087,10 @@ jobs:
   # ============================================================================
   # JOB 11: IAC — CHECKOV
   # ============================================================================
-  # Revisa Infrastructure as Code.
-  # ============================================================================
 
   iac-checkov:
     name: "IaC — Checkov"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       security-events: write
@@ -1171,7 +1117,7 @@ jobs:
             cat > checkov_results.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAd_Nhovw$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
             "runs": []
           }
           SARIF
@@ -1202,8 +1148,6 @@ jobs:
   # ============================================================================
   # JOB 12: DAST — OWASP ZAP BASELINE
   # ============================================================================
-  # DAST solo por schedule o manual con run_dast=true.
-  # ============================================================================
 
   dast-zap:
     name: "DAST — OWASP ZAP Baseline"
@@ -1228,10 +1172,8 @@ jobs:
           DAST_TARGET_URL_VALUE: ${{ secrets.DAST_TARGET_URL }}
         run: |
           if [ -z "$DAST_TARGET_URL_VALUE" ]; then
-            echo "DAST_TARGET_URL secret is not set. Skipping DAST."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "DAST target URL is set."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -1275,13 +1217,13 @@ jobs:
 
           sarif = {
               "version": "2.1.0",
-              "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAd_Nhovw$ ",
+              "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
               "runs": [
                   {
                       "tool": {
                           "driver": {
                               "name": "OWASP ZAP",
-                              "informationUri": "https://urldefense.com/v3/__https://www.zaproxy.org/__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yDNBm8uCA$ ",
+                              "informationUri": "https://urldefense.com/v3/__https://www.zaproxy.org/__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsrAf3EIQ$ ",
                               "rules": [],
                           }
                       },
@@ -1345,7 +1287,7 @@ jobs:
             cat > zap_results.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAd_Nhovw$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
             "runs": []
           }
           SARIF
@@ -1374,7 +1316,9 @@ jobs:
   # JOB 13: SECURITY REPORT — CENTRALIZED VERDICT
   # ============================================================================
   # Único job que puede fallar.
-  # Consolida todos los artefactos en reporte Markdown, JSON y HTML en español.
+  # Guarda reportes en:
+  # - Artifact centralized-security-report
+  # - Carpeta security-reports/ del repositorio si commit_report=true
   # ============================================================================
 
   security-report:
@@ -1398,9 +1342,12 @@ jobs:
     if: always()
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -1414,9 +1361,12 @@ jobs:
           from html import escape
 
           root = pathlib.Path("all_scan_results")
-          report_md = pathlib.Path("https://urldefense.com/v3/__http://security_report_es.md__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAj_Xf0Qg$ ")
-          report_json = pathlib.Path("security_report_es.json")
-          report_html = pathlib.Path("security_report_es.html")
+          output_dir = pathlib.Path("security-reports")
+          output_dir.mkdir(exist_ok=True)
+
+          report_txt = output_dir / "security_report_es.txt"
+          report_json = output_dir / "security_report_es.json"
+          report_html = output_dir / "security_report_es.html"
 
           severity_order = ["critical", "high", "medium", "low", "info", "unknown"]
           grouped = {severity: [] for severity in severity_order}
@@ -1544,9 +1494,6 @@ jobs:
                       item.get("Description", "Posible secreto expuesto"),
                       item.get("File", ""),
                       item.get("StartLine", ""),
-                      {
-                          "commit": item.get("Commit", ""),
-                      },
                   )
 
           def parse_pip_audit(path):
@@ -1568,13 +1515,6 @@ jobs:
                           severity,
                           vuln.get("id", "PYTHON_VULN"),
                           f"{pkg.get('name', '?')} {pkg.get('version', '')}: {vuln.get('description', vuln.get('fix_versions', ''))}",
-                          "",
-                          "",
-                          {
-                              "package": pkg.get("name", ""),
-                              "version": pkg.get("version", ""),
-                              "fix_versions": vuln.get("fix_versions", []),
-                          },
                       )
 
           def parse_llm_guard(path):
@@ -1647,8 +1587,6 @@ jobs:
                   )
 
           def parse_garak(path):
-              # Garak puede producir varios formatos según versión. Se deja evidencia como info
-              # si se detecta un archivo JSON/JSONL de salida.
               try:
                   text = path.read_text(encoding="utf-8", errors="ignore")
               except Exception:
@@ -1719,50 +1657,41 @@ jobs:
           }
 
           lines = []
-          lines.append("# Reporte centralizado de seguridad")
+          lines.append("REPORTE CENTRALIZADO DE SEGURIDAD")
+          lines.append("=" * 80)
           lines.append("")
           lines.append("Este reporte consolida todos los resultados de seguridad generados por el pipeline.")
           lines.append("")
-          lines.append("## Resumen ejecutivo")
-          lines.append("")
-          lines.append(f"- Total de hallazgos: {total}")
-          lines.append(f"- Críticos: {counts.get('critical', 0)}")
-          lines.append(f"- Altos: {counts.get('high', 0)}")
-          lines.append(f"- Medios: {counts.get('medium', 0)}")
-          lines.append(f"- Bajos: {counts.get('low', 0)}")
-          lines.append(f"- Informativos: {counts.get('info', 0)}")
-          lines.append(f"- Desconocidos: {counts.get('unknown', 0)}")
+          lines.append("RESUMEN EJECUTIVO")
+          lines.append("-" * 80)
+          lines.append(f"Total de hallazgos : {total}")
+          lines.append(f"Críticos           : {counts.get('critical', 0)}")
+          lines.append(f"Altos              : {counts.get('high', 0)}")
+          lines.append(f"Medios             : {counts.get('medium', 0)}")
+          lines.append(f"Bajos              : {counts.get('low', 0)}")
+          lines.append(f"Informativos       : {counts.get('info', 0)}")
+          lines.append(f"Desconocidos       : {counts.get('unknown', 0)}")
           lines.append("")
 
           for severity in severity_order:
               items = grouped.get(severity, [])
-              lines.append(f"## Hallazgos {names[severity]} ({len(items)})")
               lines.append("")
+              lines.append(f"HALLAZGOS {names[severity].upper()} ({len(items)})")
+              lines.append("-" * 80)
 
               if not items:
                   lines.append("Sin hallazgos.")
-                  lines.append("")
                   continue
 
-              lines.append("| Herramienta | Regla | Archivo | Línea | Descripción |")
-              lines.append("|---|---|---|---|---|")
+              for index, item in enumerate(items, 1):
+                  lines.append(f"{index}. Herramienta : {item.get('tool', '')}")
+                  lines.append(f"   Regla       : {item.get('rule', '')}")
+                  lines.append(f"   Archivo     : {item.get('file', '')}")
+                  lines.append(f"   Línea       : {item.get('line', '')}")
+                  lines.append(f"   Descripción : {item.get('message', '')}")
+                  lines.append("")
 
-              for item in items:
-                  message = str(item.get("message", "")).replace("\n", " ").replace("|", "\\|")
-                  if len(message) > 300:
-                      message = message[:300] + "..."
-
-                  lines.append(
-                      f"| {item.get('tool', '')} "
-                      f"| {item.get('rule', '')} "
-                      f"| {item.get('file', '')} "
-                      f"| {item.get('line', '')} "
-                      f"| {message} |"
-                  )
-
-              lines.append("")
-
-          report_md.write_text("\n".join(lines), encoding="utf-8")
+          report_txt.write_text("\n".join(lines), encoding="utf-8")
 
           payload = {
               "summary": counts,
@@ -1822,24 +1751,57 @@ jobs:
           html.extend(["</body>", "</html>"])
           report_html.write_text("\n".join(html), encoding="utf-8")
 
-          print(report_md.read_text(encoding="utf-8"))
+          print(report_txt.read_text(encoding="utf-8"))
           PY
 
       - name: Add centralized report to job summary
         if: always()
         run: |
-          cat https://urldefense.com/v3/__http://security_report_es.md__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAj_Xf0Qg$  >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import os
+          import pathlib
+
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          report_path = pathlib.Path("security-reports") / "security_report_es.txt"
+
+          with open(summary_path, "a", encoding="utf-8") as summary:
+              summary.write("## Reporte centralizado de seguridad\n\n")
+              summary.write("```text\n")
+              if report_path.exists():
+                  summary.write(report_path.read_text(encoding="utf-8", errors="ignore")[:120000])
+              else:
+                  summary.write("No se encontró el reporte local generado por el pipeline.")
+              summary.write("\n```\n")
+          PY
 
       - name: Upload centralized security report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: centralized-security-report
-          path: |
-            https://urldefense.com/v3/__http://security_report_es.md__;!!P110LumUDw!72Bc6ASPAKWbuh2BozwJ-RW3H0fqvNpwZDYuXvG3sII2OvKf6mRyL6UrlZtAG8E5S90fPs8vbzTU2Pxuv9HU-yAj_Xf0Qg$ 
-            security_report_es.json
-            security_report_es.html
+          path: security-reports/
           retention-days: 30
+
+      - name: Commit report to repository
+        if: >-
+          always() &&
+          github.event_name != 'pull_request' &&
+          (github.event.inputs.commit_report == 'true' || github.event_name == 'push' || github.event_name == 'schedule')
+        continue-on-error: true
+        run: |
+          git config https://urldefense.com/v3/__http://user.name__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsSI1xO1g$  "github-actions"
+          git config https://urldefense.com/v3/__http://user.email__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOuq9TduqQ$  "github-actions@github.com"
+
+          git add security-reports/security_report_es.txt
+          git add security-reports/security_report_es.json
+          git add security-reports/security_report_es.html
+
+          if git diff --cached --quiet; then
+            echo "No report changes to commit."
+          else
+            git commit -m "chore(security): update centralized security report [skip ci]"
+            git push
+          fi
 
       - name: Final verdict
         run: |
@@ -1848,7 +1810,7 @@ jobs:
           import os
           import sys
 
-          data = json.load(open("security_report_es.json", encoding="utf-8"))
+          data = json.load(open("security-reports/security_report_es.json", encoding="utf-8"))
           summary = data.get("summary", {})
 
           threshold = "${{ github.event.inputs.fail_on }}"
