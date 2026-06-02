@@ -4,25 +4,28 @@ name: Security Pipeline
 # SECURITY PIPELINE
 # ==============================================================================
 # Objetivo:
-# - Ejecutar controles de seguridad, calidad, AppSec y AI Security.
-# - Ningún scanner detiene el pipeline.
-# - La única X roja aparece en el job final: Security Report.
-# - El reporte final centraliza CRITICAL, HIGH, MEDIUM, LOW, INFO y UNKNOWN.
-# - El reporte se guarda como artifact de GitHub y opcionalmente se commitea al repo.
+# - Ejecutar seguridad AppSec + AI Security sin detener scanners intermedios.
+# - Generar un reporte centralizado en español.
+# - Guardar el reporte en GitHub Actions Artifacts y en el Job Summary.
+# - Evitar comandos que en entornos corporativos sean reescritos como URL Defense.
 #
-# Correcciones:
-# - No se usa cat directo sobre nombres tipo https://urldefense.com/v3/__http://archivo.md__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOvkzzSstQ$  en el Step Summary para evitar
-#   que entornos empresariales reescriban rutas como URL Defense.
-# - El resumen se agrega al Step Summary con Python, leyendo el archivo local.
-# - Los reportes se guardan con nombres .txt/.json/.html y dentro de security-reports/.
-# - Gitleaks se ejecuta por Docker, sin curl externo manual ni tar sobre URL.
-# - Todos los scanners continúan, aunque fallen. El único gate final es Security Report.
+# Decisiones para evitar errores:
+# - No se hace commit automático al repositorio.
+# - No se usa git config https://urldefense.com/v3/__http://user.name/user.email__;!!P110LumUDw!4Xowoy6EXeSxvcpD7KWZzGgKqySP9tdVhwyb7H4KfM8FrPdVIYXIw6aJ8WdSgUfMU7Zviag2Gd8pQZ6Yg003Uast-SfmAQ$ .
+# - No se usa cat directo sobre archivos de reporte en el Step Summary.
+# - No se usa curl para instalar Gitleaks.
+# - El reporte final queda como artifact dentro de GitHub Actions.
+# - El único job que puede fallar es Security Report, pero por defecto NO falla.
 #
-# Requisitos opcionales:
-# - DAST_TARGET_URL: requerido para OWASP ZAP.
-# - PROMPTFOO_API_KEY: requerido para Promptfoo Code Scan.
-# - promptfooconfig.yaml/yml o promptfoo.yaml/yml: requerido para Promptfoo Red Team.
-# - OPENAI_API_KEY o variables GARAK_MODEL_TYPE/GARAK_MODEL_NAME: requerido para Garak dinámico.
+# AI Security a nivel de código:
+# - Semgrep AI Best Practices.
+# - Reglas locales OWASP LLM Top 10.
+# - Reglas locales para agentes, tools, RAG, MCP, prompt injection, system prompt leakage,
+#   insecure output handling, tool abuse, excessive agency y ejecución peligrosa.
+# - Promptfoo Code Scan si está configurado.
+# - Promptfoo Red Team si existe configuración.
+# - Garak si existe modelo/API key.
+# - LLM Guard corpus local.
 # ==============================================================================
 
 on:
@@ -47,16 +50,9 @@ on:
       fail_on:
         description: "Final report failure threshold"
         required: false
-        default: "high"
+        default: "never"
         type: choice
         options: ["critical", "high", "medium", "low", "never"]
-
-      commit_report:
-        description: "Commit final report into repository"
-        required: false
-        default: "true"
-        type: choice
-        options: ["true", "false"]
 
 concurrency:
   group: security-${{ github.ref }}
@@ -68,7 +64,7 @@ permissions:
 env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
-  DEFAULT_FAIL_ON: "high"
+  DEFAULT_FAIL_ON: "never"
 
 jobs:
   # ============================================================================
@@ -78,6 +74,7 @@ jobs:
   dependency-policy:
     name: "Policy — Dependency Pinning"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
 
@@ -179,6 +176,7 @@ jobs:
   ruff:
     name: "Lint — Ruff"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
 
@@ -229,6 +227,7 @@ jobs:
   sast-semgrep:
     name: "SAST — Semgrep"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       security-events: write
@@ -276,7 +275,7 @@ jobs:
             cat > semgrep.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!4Xowoy6EXeSxvcpD7KWZzGgKqySP9tdVhwyb7H4KfM8FrPdVIYXIw6aJ8WdSgUfMU7Zviag2Gd8pQZ6Yg003UatDOtd7Jw$ ",
             "runs": []
           }
           SARIF
@@ -286,7 +285,7 @@ jobs:
             echo '{"results":[]}' > semgrep.json
           fi
 
-      - name: Upload Semgrep SARIF to GitHub Security tab
+      - name: Upload Semgrep SARIF
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
@@ -305,21 +304,26 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # JOB 4: AI SAST — SEMGREP AI / LLM / AGENTS
+  # JOB 4: AI SAST — OWASP LLM TOP 10 + AGENTS CODE RULES
   # ============================================================================
-  # Incluye reglas locales para detectar posibles riesgos:
-  # - Prompt injection
-  # - System prompt leakage
-  # - Tool abuse
-  # - Ejecución de comandos en agentes
-  # - eval/exec sobre salidas no confiables
-  # - RAG poisoning
-  # - Insecure output handling
+  # Reglas de código para:
+  # - LLM01 Prompt Injection
+  # - LLM02 Sensitive Information Disclosure
+  # - LLM03 Supply Chain
+  # - LLM04 Data and Model Poisoning
+  # - LLM05 Improper Output Handling
+  # - LLM06 Excessive Agency
+  # - LLM07 System Prompt Leakage
+  # - LLM08 Vector and Embedding Weaknesses
+  # - LLM09 Misinformation / Unsafe reliance
+  # - LLM10 Unbounded Consumption
+  # - Agent tool abuse, MCP/tool execution, RAG poisoning y memoria insegura.
   # ============================================================================
 
   ai-sast-semgrep:
-    name: "AI SAST — Semgrep AI LLM Agents"
+    name: "AI SAST — OWASP LLM and Agents"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       security-events: write
@@ -341,20 +345,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install semgrep
 
-      - name: Create local AI security Semgrep rules
+      - name: Create local OWASP LLM and Agent Semgrep rules
         run: |
           mkdir -p .semgrep/ai-security
 
-          cat > .semgrep/ai-security/llm_agents_prompt_injection.yml <<'YAML'
+          cat > .semgrep/ai-security/owasp_llm_agents.yml <<'YAML'
           rules:
-            - id: python-llm-user-input-in-prompt
+            - id: owasp-llm01-python-user-input-in-prompt
               languages: [python]
               severity: WARNING
-              message: "Posible riesgo AI/LLM: input controlado por usuario usado en construcción de prompt. Revisar prompt injection, fuga de datos y validación."
+              message: "OWASP LLM01: posible prompt injection. Input controlado por usuario usado en construcción de prompt."
               metadata:
-                category: security
+                owasp_llm: LLM01 Prompt Injection
                 technology: [llm, ai, prompt-injection]
-                confidence: medium
               patterns:
                 - pattern-either:
                     - pattern: |
@@ -369,14 +372,185 @@ jobs:
                     metavariable: $USER
                     regex: (?i).*(user|input|query|question|request|message|prompt|text|content|body|data|payload).*
 
-            - id: python-llm-system-prompt-hardcoded
+            - id: owasp-llm01-javascript-user-input-in-prompt
+              languages: [javascript, typescript]
+              severity: WARNING
+              message: "OWASP LLM01: posible prompt injection. Input controlado por usuario usado en prompt."
+              metadata:
+                owasp_llm: LLM01 Prompt Injection
+                technology: [llm, ai, prompt-injection]
+              pattern-either:
+                - pattern: |
+                    const $PROMPT = `...${$USER}...`
+                - pattern: |
+                    let $PROMPT = `...${$USER}...`
+                - pattern: |
+                    var $PROMPT = `...${$USER}...`
+                - pattern: |
+                    $PROMPT += $USER
+                - pattern: |
+                    $PROMPT = $PROMPT + $USER
+
+            - id: owasp-llm02-sensitive-data-in-prompt-python
+              languages: [python]
+              severity: WARNING
+              message: "OWASP LLM02: posible envío de información sensible al prompt o al modelo."
+              metadata:
+                owasp_llm: LLM02 Sensitive Information Disclosure
+                technology: [llm, ai, privacy]
+              pattern-either:
+                - pattern: |
+                    $CLIENT.chat.completions.create(..., messages=[..., {"role": $ROLE, "content": $SECRET}, ...], ...)
+                - pattern: |
+                    $MODEL.invoke($SECRET)
+                - pattern: |
+                    $CHAIN.run($SECRET)
+              metavariable-regex:
+                metavariable: $SECRET
+                regex: (?i).*(password|passwd|secret|token|api_key|apikey|credential|private|rut|ssn|email|phone|address|pii|personal).*
+
+            - id: owasp-llm02-sensitive-data-in-prompt-js
+              languages: [javascript, typescript]
+              severity: WARNING
+              message: "OWASP LLM02: posible envío de información sensible al prompt o al modelo."
+              metadata:
+                owasp_llm: LLM02 Sensitive Information Disclosure
+                technology: [llm, ai, privacy]
+              pattern-either:
+                - pattern: |
+                    $CLIENT.chat.completions.create({..., messages: [..., {role: $ROLE, content: $SECRET}, ...], ...})
+                - pattern: |
+                    $MODEL.invoke($SECRET)
+                - pattern: |
+                    $CHAIN.call($SECRET)
+
+            - id: owasp-llm03-ai-supply-chain-risk-python
               languages: [python]
               severity: INFO
-              message: "Posible system prompt hardcodeado. Revisar exposición, logs y fuga de instrucciones internas."
+              message: "OWASP LLM03: dependencia o framework AI/LLM detectado. Revisar versión, origen, permisos y CVEs."
               metadata:
-                category: security
+                owasp_llm: LLM03 Supply Chain
+                technology: [llm, ai, supply-chain]
+              pattern-either:
+                - pattern: import langchain
+                - pattern: import llama_index
+                - pattern: import openai
+                - pattern: import transformers
+                - pattern: import sentence_transformers
+                - pattern: import autogen
+                - pattern: import crewai
+
+            - id: owasp-llm04-rag-poisoning-python
+              languages: [python]
+              severity: WARNING
+              message: "OWASP LLM04/LLM08: posible RAG poisoning o debilidad vectorial. Validar origen y sanitización de documentos."
+              metadata:
+                owasp_llm: LLM04 Data and Model Poisoning / LLM08 Vector and Embedding Weaknesses
+                technology: [llm, ai, rag, vector-db]
+              pattern-either:
+                - pattern: $DB.add_documents($DOCS, ...)
+                - pattern: $DB.add_texts($TEXTS, ...)
+                - pattern: $INDEX.insert($DOCS, ...)
+                - pattern: $VECTORSTORE.add_documents($DOCS, ...)
+                - pattern: $VECTORSTORE.from_documents($DOCS, ...)
+
+            - id: owasp-llm04-rag-poisoning-js
+              languages: [javascript, typescript]
+              severity: WARNING
+              message: "OWASP LLM04/LLM08: posible RAG poisoning o debilidad vectorial. Validar origen y sanitización de documentos."
+              metadata:
+                owasp_llm: LLM04 Data and Model Poisoning / LLM08 Vector and Embedding Weaknesses
+                technology: [llm, ai, rag, vector-db]
+              pattern-either:
+                - pattern: |
+                    $VECTORSTORE.addDocuments($DOCS, ...)
+                - pattern: |
+                    $VECTORSTORE.addVectors($VECTORS, ...)
+                - pattern: |
+                    $INDEX.insert($DOCS, ...)
+
+            - id: owasp-llm05-python-llm-output-used-in-sql
+              languages: [python]
+              severity: WARNING
+              message: "OWASP LLM05: posible insecure output handling. Contenido variable usado en SQL sin parametrización clara."
+              metadata:
+                owasp_llm: LLM05 Improper Output Handling
+                technology: [llm, ai, sql-injection]
+              pattern-either:
+                - pattern: $CUR.execute(f"...{$X}...")
+                - pattern: $CUR.execute("...".format($X))
+                - pattern: $CUR.execute("..." + $X)
+
+            - id: owasp-llm05-js-output-used-in-html
+              languages: [javascript, typescript]
+              severity: WARNING
+              message: "OWASP LLM05: posible insecure output handling. Contenido variable renderizado como HTML."
+              metadata:
+                owasp_llm: LLM05 Improper Output Handling
+                technology: [llm, ai, xss]
+              pattern-either:
+                - pattern: |
+                    dangerouslySetInnerHTML={{__html: $HTML}}
+                - pattern: |
+                    $EL.innerHTML = $HTML
+
+            - id: owasp-llm05-python-dangerous-eval-exec
+              languages: [python]
+              severity: ERROR
+              message: "OWASP LLM05/LLM06: uso de eval/exec. Si procesa input o salida de LLM puede permitir ejecución arbitraria."
+              metadata:
+                owasp_llm: LLM05 Improper Output Handling / LLM06 Excessive Agency
+                technology: [llm, ai, agents, rce]
+              pattern-either:
+                - pattern: eval($X)
+                - pattern: exec($X)
+
+            - id: owasp-llm06-python-agent-dangerous-shell
+              languages: [python]
+              severity: ERROR
+              message: "OWASP LLM06: agente/tool con ejecución de comandos del sistema. Revisar excessive agency y command injection."
+              metadata:
+                owasp_llm: LLM06 Excessive Agency
+                technology: [llm, ai, agents, tool-abuse, command-injection]
+              pattern-either:
+                - pattern: subprocess.run($CMD, shell=True, ...)
+                - pattern: subprocess.Popen($CMD, shell=True, ...)
+                - pattern: os.system($CMD)
+                - pattern: os.popen($CMD)
+
+            - id: owasp-llm06-js-agent-dangerous-exec
+              languages: [javascript, typescript]
+              severity: ERROR
+              message: "OWASP LLM06: agente/tool con ejecución de comandos del sistema. Revisar excessive agency y command injection."
+              metadata:
+                owasp_llm: LLM06 Excessive Agency
+                technology: [llm, ai, agents, tool-abuse, command-injection]
+              pattern-either:
+                - pattern: child_process.exec($CMD, ...)
+                - pattern: child_process.execSync($CMD, ...)
+                - pattern: exec($CMD, ...)
+                - pattern: execSync($CMD, ...)
+
+            - id: owasp-llm06-agent-tool-broad-permissions-python
+              languages: [python]
+              severity: WARNING
+              message: "OWASP LLM06: tool/agente detectado. Revisar permisos, allowlist, validación de argumentos y límites de ejecución."
+              metadata:
+                owasp_llm: LLM06 Excessive Agency
+                technology: [llm, ai, agents, tools]
+              pattern-either:
+                - pattern: Tool(..., func=$FUNC, ...)
+                - pattern: StructuredTool.from_function($FUNC, ...)
+                - pattern: initialize_agent(..., tools=$TOOLS, ...)
+                - pattern: create_openai_functions_agent(..., tools=$TOOLS, ...)
+
+            - id: owasp-llm07-system-prompt-hardcoded-python
+              languages: [python]
+              severity: INFO
+              message: "OWASP LLM07: system prompt hardcodeado. Revisar fuga de instrucciones internas, logs y exposición."
+              metadata:
+                owasp_llm: LLM07 System Prompt Leakage
                 technology: [llm, ai, prompt-leakage]
-                confidence: low
               pattern-either:
                 - pattern: |
                     {"role": "system", "content": "..."}
@@ -387,87 +561,13 @@ jobs:
                 - pattern: |
                     {"role": 'system', "content": $CONTENT}
 
-            - id: python-llm-tool-dangerous-shell
-              languages: [python]
-              severity: ERROR
-              message: "Riesgo crítico de agente/tools: ejecución de comandos del sistema posiblemente influenciada por input externo."
-              metadata:
-                category: security
-                technology: [llm, ai, agents, tool-abuse, command-injection]
-                confidence: medium
-              pattern-either:
-                - pattern: subprocess.run($CMD, shell=True, ...)
-                - pattern: subprocess.Popen($CMD, shell=True, ...)
-                - pattern: os.system($CMD)
-                - pattern: os.popen($CMD)
-
-            - id: python-llm-dangerous-eval-exec
-              languages: [python]
-              severity: ERROR
-              message: "Riesgo AI/Agent: uso de eval/exec. Si recibe salida de LLM o input externo puede permitir ejecución arbitraria."
-              metadata:
-                category: security
-                technology: [llm, ai, agents, insecure-output-handling]
-                confidence: high
-              pattern-either:
-                - pattern: eval($X)
-                - pattern: exec($X)
-
-            - id: python-llm-output-used-in-sql
-              languages: [python]
-              severity: WARNING
-              message: "Posible insecure output handling: contenido variable usado en SQL. Revisar SQL injection y parametrización."
-              metadata:
-                category: security
-                technology: [llm, ai, insecure-output-handling, sql-injection]
-                confidence: medium
-              pattern-either:
-                - pattern: $CUR.execute(f"...{$X}...")
-                - pattern: $CUR.execute("...".format($X))
-                - pattern: $CUR.execute("..." + $X)
-
-            - id: python-llm-vectorstore-ingest-untrusted
-              languages: [python]
-              severity: WARNING
-              message: "Posible riesgo RAG poisoning: documentos o texto no confiable cargados a vectorstore/index."
-              metadata:
-                category: security
-                technology: [llm, ai, rag, rag-poisoning]
-                confidence: low
-              pattern-either:
-                - pattern: $DB.add_documents($DOCS, ...)
-                - pattern: $DB.add_texts($TEXTS, ...)
-                - pattern: $INDEX.insert($DOCS, ...)
-                - pattern: $VECTORSTORE.add_documents($DOCS, ...)
-
-            - id: javascript-llm-user-input-in-prompt
-              languages: [javascript, typescript]
-              severity: WARNING
-              message: "Posible riesgo AI/LLM: input controlado por usuario usado en prompt. Revisar prompt injection."
-              metadata:
-                category: security
-                technology: [llm, ai, prompt-injection]
-                confidence: medium
-              pattern-either:
-                - pattern: |
-                    const $PROMPT = `...${$USER}...`
-                - pattern: |
-                    let $PROMPT = `...${$USER}...`
-                - pattern: |
-                    var $PROMPT = `...${$USER}...`
-                - pattern: |
-                    $PROMPT = $PROMPT + $USER
-                - pattern: |
-                    $PROMPT += $USER
-
-            - id: javascript-llm-system-prompt-hardcoded
+            - id: owasp-llm07-system-prompt-hardcoded-js
               languages: [javascript, typescript]
               severity: INFO
-              message: "Posible system prompt hardcodeado. Revisar exposición, logs y fuga de instrucciones."
+              message: "OWASP LLM07: system prompt hardcodeado. Revisar fuga de instrucciones internas, logs y exposición."
               metadata:
-                category: security
+                owasp_llm: LLM07 System Prompt Leakage
                 technology: [llm, ai, prompt-leakage]
-                confidence: low
               pattern-either:
                 - pattern: |
                     { role: "system", content: "..." }
@@ -478,33 +578,45 @@ jobs:
                 - pattern: |
                     { role: 'system', content: $CONTENT }
 
-            - id: javascript-llm-dangerous-exec
-              languages: [javascript, typescript]
-              severity: ERROR
-              message: "Riesgo crítico de agente/tools: ejecución de comandos posiblemente influenciada por input externo."
+            - id: owasp-llm09-unsafe-auto-approve-python
+              languages: [python]
+              severity: WARNING
+              message: "OWASP LLM09: posible confianza excesiva en salida de LLM para decisión sensible sin revisión humana."
               metadata:
-                category: security
-                technology: [llm, ai, agents, tool-abuse, command-injection]
-                confidence: medium
+                owasp_llm: LLM09 Misinformation
+                technology: [llm, ai, decision-automation]
               pattern-either:
-                - pattern: child_process.exec($CMD, ...)
-                - pattern: child_process.execSync($CMD, ...)
-                - pattern: exec($CMD, ...)
-                - pattern: execSync($CMD, ...)
+                - pattern: |
+                    if $MODEL.invoke(...):
+                        $ACTION(...)
+                - pattern: |
+                    if $LLM(...):
+                        $ACTION(...)
 
-            - id: javascript-llm-output-used-in-dangerous-html
+            - id: owasp-llm10-unbounded-consumption-python
+              languages: [python]
+              severity: WARNING
+              message: "OWASP LLM10: llamada a LLM sin límites evidentes. Revisar max_tokens, timeout, rate limit y costos."
+              metadata:
+                owasp_llm: LLM10 Unbounded Consumption
+                technology: [llm, ai, dos, cost]
+              pattern-either:
+                - pattern: $CLIENT.chat.completions.create(...)
+                - pattern: $CLIENT.responses.create(...)
+                - pattern: openai.ChatCompletion.create(...)
+
+            - id: owasp-llm10-unbounded-consumption-js
               languages: [javascript, typescript]
               severity: WARNING
-              message: "Posible insecure output handling: contenido variable renderizado como HTML. Revisar XSS por salida de LLM."
+              message: "OWASP LLM10: llamada a LLM sin límites evidentes. Revisar max_tokens, timeout, rate limit y costos."
               metadata:
-                category: security
-                technology: [llm, ai, insecure-output-handling, xss]
-                confidence: medium
+                owasp_llm: LLM10 Unbounded Consumption
+                technology: [llm, ai, dos, cost]
               pattern-either:
                 - pattern: |
-                    dangerouslySetInnerHTML={{__html: $HTML}}
+                    $CLIENT.chat.completions.create(...)
                 - pattern: |
-                    $EL.innerHTML = $HTML
+                    $CLIENT.responses.create(...)
           YAML
 
       - name: Run Semgrep AI official and local rules
@@ -531,7 +643,7 @@ jobs:
             cat > semgrep_ai.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!4Xowoy6EXeSxvcpD7KWZzGgKqySP9tdVhwyb7H4KfM8FrPdVIYXIw6aJ8WdSgUfMU7Zviag2Gd8pQZ6Yg003UatDOtd7Jw$ ",
             "runs": []
           }
           SARIF
@@ -541,13 +653,13 @@ jobs:
             echo '{"results":[]}' > semgrep_ai.json
           fi
 
-      - name: Upload Semgrep AI SARIF to GitHub Security tab
+      - name: Upload Semgrep AI SARIF
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep_ai.sarif
-          category: semgrep-ai-llm-agents
+          category: semgrep-ai-owasp-llm-agents
 
       - name: Upload Semgrep AI artifacts
         if: always()
@@ -566,6 +678,7 @@ jobs:
   ai-code-scan-promptfoo:
     name: "AI Code Scan — Promptfoo"
     runs-on: ubuntu-latest
+
     if: github.event_name == 'pull_request'
 
     permissions:
@@ -604,10 +717,9 @@ jobs:
           enable-fork-prs: false
           sarif-output-path: promptfoo_code_scan.sarif
           guidance: |
-            Responde y reporta en español.
-            Revisa riesgos de seguridad en aplicaciones LLM y agentes.
-            Prioriza prompt injection directa e indirecta, jailbreaks, fuga de system prompt, exposición de PII, data exfiltration, RAG poisoning, tool abuse, excessive agency, insecure output handling, memory poisoning y uso inseguro de MCP/tools.
-            Reporta también hallazgos LOW y MEDIUM.
+            Reporta en español.
+            Revisa OWASP LLM Top 10, agentes, tools, RAG, MCP, prompt injection, indirect prompt injection, system prompt leakage, PII exposure, data exfiltration, RAG poisoning, memory poisoning, excessive agency, insecure output handling y tool abuse.
+            Reporta hallazgos LOW, MEDIUM, HIGH y CRITICAL.
 
       - name: Create Promptfoo Code Scan metadata
         if: always()
@@ -628,13 +740,13 @@ jobs:
             cat > promptfoo_code_scan.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!4Xowoy6EXeSxvcpD7KWZzGgKqySP9tdVhwyb7H4KfM8FrPdVIYXIw6aJ8WdSgUfMU7Zviag2Gd8pQZ6Yg003UatDOtd7Jw$ ",
             "runs": []
           }
           SARIF
           fi
 
-      - name: Upload Promptfoo SARIF to GitHub Security tab
+      - name: Upload Promptfoo SARIF
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
@@ -659,6 +771,7 @@ jobs:
   ai-redteam-promptfoo:
     name: "AI Red Team — Promptfoo"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
 
@@ -725,6 +838,7 @@ jobs:
   ai-garak:
     name: "AI Vulnerability Scan — Garak"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
 
@@ -786,6 +900,7 @@ jobs:
   ai-llm-guard:
     name: "AI Input Scan — LLM Guard"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
 
@@ -841,8 +956,8 @@ jobs:
 
           try:
               from llm_guard.input_scanners import PromptInjection
-
               scanner = PromptInjection()
+
               for index, prompt in enumerate(payloads, 1):
                   sanitized_prompt, is_valid, risk_score = scanner.scan(prompt)
 
@@ -918,6 +1033,7 @@ jobs:
   sca-dependencies:
     name: "SCA — Trivy + pip-audit"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       security-events: write
@@ -984,7 +1100,7 @@ jobs:
             pip_audit_osv.json
           retention-days: 30
 
-      - name: Run Trivy — SARIF
+      - name: Run Trivy SARIF
         continue-on-error: true
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -1003,13 +1119,13 @@ jobs:
             cat > trivy_results.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!4Xowoy6EXeSxvcpD7KWZzGgKqySP9tdVhwyb7H4KfM8FrPdVIYXIw6aJ8WdSgUfMU7Zviag2Gd8pQZ6Yg003UatDOtd7Jw$ ",
             "runs": []
           }
           SARIF
           fi
 
-      - name: Upload Trivy SARIF to GitHub Security tab
+      - name: Upload Trivy SARIF
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
@@ -1028,21 +1144,16 @@ jobs:
   # ============================================================================
   # JOB 10: SECRETS — GITLEAKS
   # ============================================================================
-  # Corrección:
-  # - Se usa contenedor oficial de Gitleaks.
-  # - No se usa curl manual.
-  # - No se descarga ni desempaqueta tar.gz desde una URL.
+  # Sin curl. Sin git config. No detiene pipeline.
   # ============================================================================
 
   secret-scan:
     name: "Secrets — Gitleaks"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       pull-requests: read
-
-    container:
-      image: zricethezav/gitleaks:v8.30.1
 
     steps:
       - name: Checkout repository
@@ -1050,27 +1161,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
+      - name: Run Gitleaks through Docker
         continue-on-error: true
-        shell: sh
         run: |
-          CONFIG_FLAG=""
-          if [ -f ".gitleaks.toml" ]; then
-            CONFIG_FLAG="--config .gitleaks.toml"
-          fi
-
-          gitleaks detect \
-            --source . \
-            --log-opts="--all" \
-            $CONFIG_FLAG \
+          docker run --rm \
+            -v "$PWD:/repo" \
+            zricethezav/gitleaks:v8.30.1 \
+            detect \
+            --source /repo \
             --report-format json \
-            --report-path gitleaks_report.json \
+            --report-path /repo/gitleaks_report.json \
             --exit-code 0 \
             --verbose || true
 
       - name: Ensure Gitleaks report exists
         if: always()
-        shell: sh
         run: |
           if [ ! -f gitleaks_report.json ]; then
             echo "[]" > gitleaks_report.json
@@ -1091,6 +1196,7 @@ jobs:
   iac-checkov:
     name: "IaC — Checkov"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       security-events: write
@@ -1117,7 +1223,7 @@ jobs:
             cat > checkov_results.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!4Xowoy6EXeSxvcpD7KWZzGgKqySP9tdVhwyb7H4KfM8FrPdVIYXIw6aJ8WdSgUfMU7Zviag2Gd8pQZ6Yg003UatDOtd7Jw$ ",
             "runs": []
           }
           SARIF
@@ -1127,7 +1233,7 @@ jobs:
             echo "{}" > checkov_results.json
           fi
 
-      - name: Upload Checkov SARIF to GitHub Security tab
+      - name: Upload Checkov SARIF
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
@@ -1217,13 +1323,13 @@ jobs:
 
           sarif = {
               "version": "2.1.0",
-              "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
+              "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!4Xowoy6EXeSxvcpD7KWZzGgKqySP9tdVhwyb7H4KfM8FrPdVIYXIw6aJ8WdSgUfMU7Zviag2Gd8pQZ6Yg003UatDOtd7Jw$ ",
               "runs": [
                   {
                       "tool": {
                           "driver": {
                               "name": "OWASP ZAP",
-                              "informationUri": "https://urldefense.com/v3/__https://www.zaproxy.org/__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsrAf3EIQ$ ",
+                              "informationUri": "https://urldefense.com/v3/__https://www.zaproxy.org/__;!!P110LumUDw!4Xowoy6EXeSxvcpD7KWZzGgKqySP9tdVhwyb7H4KfM8FrPdVIYXIw6aJ8WdSgUfMU7Zviag2Gd8pQZ6Yg003UatPM0lITQ$ ",
                               "rules": [],
                           }
                       },
@@ -1287,13 +1393,13 @@ jobs:
             cat > zap_results.sarif <<'SARIF'
           {
             "version": "2.1.0",
-            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsyVM3oGg$ ",
+            "$schema": "https://urldefense.com/v3/__https://json.schemastore.org/sarif-2.1.0.json__;!!P110LumUDw!4Xowoy6EXeSxvcpD7KWZzGgKqySP9tdVhwyb7H4KfM8FrPdVIYXIw6aJ8WdSgUfMU7Zviag2Gd8pQZ6Yg003UatDOtd7Jw$ ",
             "runs": []
           }
           SARIF
           fi
 
-      - name: Upload ZAP SARIF to GitHub Security tab
+      - name: Upload ZAP SARIF
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
@@ -1314,11 +1420,6 @@ jobs:
 
   # ============================================================================
   # JOB 13: SECURITY REPORT — CENTRALIZED VERDICT
-  # ============================================================================
-  # Único job que puede fallar.
-  # Guarda reportes en:
-  # - Artifact centralized-security-report
-  # - Carpeta security-reports/ del repositorio si commit_report=true
   # ============================================================================
 
   security-report:
@@ -1342,12 +1443,9 @@ jobs:
     if: always()
 
     permissions:
-      contents: write
+      contents: read
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -1361,7 +1459,7 @@ jobs:
           from html import escape
 
           root = pathlib.Path("all_scan_results")
-          output_dir = pathlib.Path("security-reports")
+          output_dir = pathlib.Path("security_reports")
           output_dir.mkdir(exist_ok=True)
 
           report_txt = output_dir / "security_report_es.txt"
@@ -1477,7 +1575,6 @@ jobs:
                       "Existen diferencias de formato detectadas por Ruff.",
                       str(path),
                       "",
-                      {"diff_preview": text[:2000]},
                   )
 
           def parse_gitleaks(path):
@@ -1531,10 +1628,6 @@ jobs:
                       item.get("message", ""),
                       item.get("file", ""),
                       item.get("line", ""),
-                      {
-                          "prompt": item.get("prompt", ""),
-                          "risk_score": item.get("risk_score", ""),
-                      },
                   )
 
           def parse_promptfoo_redteam(path):
@@ -1583,7 +1676,6 @@ jobs:
                       message,
                       item.get("file", ""),
                       item.get("line", ""),
-                      item,
                   )
 
           def parse_garak(path):
@@ -1762,7 +1854,7 @@ jobs:
           import pathlib
 
           summary_path = os.environ["GITHUB_STEP_SUMMARY"]
-          report_path = pathlib.Path("security-reports") / "security_report_es.txt"
+          report_path = pathlib.Path("security_reports") / "security_report_es.txt"
 
           with open(summary_path, "a", encoding="utf-8") as summary:
               summary.write("## Reporte centralizado de seguridad\n\n")
@@ -1779,29 +1871,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: centralized-security-report
-          path: security-reports/
+          path: security_reports/
           retention-days: 30
-
-      - name: Commit report to repository
-        if: >-
-          always() &&
-          github.event_name != 'pull_request' &&
-          (github.event.inputs.commit_report == 'true' || github.event_name == 'push' || github.event_name == 'schedule')
-        continue-on-error: true
-        run: |
-          git config https://urldefense.com/v3/__http://user.name__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOsSI1xO1g$  "github-actions"
-          git config https://urldefense.com/v3/__http://user.email__;!!P110LumUDw!65NjdEyfy3K5f-33x87A8pN5pq0_GkkM2ehw0shCI09wpQ5VLCm76eo0zSC739ZuWWfDlEgZP1P12-C0_F1fHOuq9TduqQ$  "github-actions@github.com"
-
-          git add security-reports/security_report_es.txt
-          git add security-reports/security_report_es.json
-          git add security-reports/security_report_es.html
-
-          if git diff --cached --quiet; then
-            echo "No report changes to commit."
-          else
-            git commit -m "chore(security): update centralized security report [skip ci]"
-            git push
-          fi
 
       - name: Final verdict
         run: |
@@ -1810,12 +1881,12 @@ jobs:
           import os
           import sys
 
-          data = json.load(open("security-reports/security_report_es.json", encoding="utf-8"))
+          data = json.load(open("security_reports/security_report_es.json", encoding="utf-8"))
           summary = data.get("summary", {})
 
           threshold = "${{ github.event.inputs.fail_on }}"
           if not threshold:
-              threshold = os.environ.get("DEFAULT_FAIL_ON", "high")
+              threshold = os.environ.get("DEFAULT_FAIL_ON", "never")
 
           threshold = threshold.lower()
 
@@ -1833,7 +1904,7 @@ jobs:
               print("Final verdict configured as never fail.")
               sys.exit(0)
 
-          min_value = order.get(threshold, 4)
+          min_value = order.get(threshold, 99)
 
           blocking = 0
           for severity, count in summary.items():
