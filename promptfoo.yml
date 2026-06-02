@@ -1,0 +1,101 @@
+description: "AI Security Code Scan"
+
+metadata:
+  owner: Security Team
+  purpose: >
+    Detectar vulnerabilidades relacionadas con IA,
+    agentes, RAG, MCP y OWASP LLM Top 10
+    mediante análisis estático de código.
+
+scanning:
+  include:
+    - "**/*.py"
+    - "**/*.js"
+    - "**/*.ts"
+    - "**/*.tsx"
+    - "**/*.jsx"
+    - "**/*.java"
+    - "**/*.cs"
+    - "**/*.go"
+
+  exclude:
+    - "**/node_modules/**"
+    - "**/.venv/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/__pycache__/**"
+
+policies:
+
+  - category: Prompt Injection
+    enabled: true
+
+  - category: Indirect Prompt Injection
+    enabled: true
+
+  - category: System Prompt Leakage
+    enabled: true
+
+  - category: Sensitive Data Disclosure
+    enabled: true
+
+  - category: Excessive Agency
+    enabled: true
+
+  - category: Tool Abuse
+    enabled: true
+
+  - category: Function Calling
+    enabled: true
+
+  - category: MCP Security
+    enabled: true
+
+  - category: Agent Security
+    enabled: true
+
+  - category: RAG Security
+    enabled: true
+
+  - category: Vector Database Security
+    enabled: true
+
+  - category: Data Exfiltration
+    enabled: true
+
+  - category: Secret Exposure
+    enabled: true
+
+  - category: Insecure Output Handling
+    enabled: true
+
+  - category: Code Execution
+    enabled: true
+
+  - category: Command Injection
+    enabled: true
+
+  - category: SSRF
+    enabled: true
+
+  - category: Deserialization
+    enabled: true
+
+  - category: Unsafe Eval
+    enabled: true
+
+severity:
+  report:
+    - critical
+    - high
+    - medium
+    - low
+    - info
+
+output:
+  format:
+    - sarif
+    - json
+
+reporting:
+  language: es
