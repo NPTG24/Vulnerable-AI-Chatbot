@@ -3,30 +3,7 @@ name: Security Pipeline
 # ==============================================================================
 # SECURITY PIPELINE
 # ==============================================================================
-# Entorno objetivo:
-# - Repositorio GitHub con código fuente.
-# - Entorno empresarial cerrado/restringido.
-# - Sin Promptfoo.
-# - Sin LLM Guard.
-# - Sin dependencias SaaS externas para AI Security.
-# - Sin upload-sarif manual a GitHub Code Scanning.
-# - Todos los resultados se guardan como artifacts.
-# - El reporte central se genera siempre.
-# - Por defecto NO falla por hallazgos: fail_on=never.
-#
-# Cobertura:
-# - Ruff: lint y formato.
-# - Semgrep general: AppSec, OWASP Top 10, secrets, Dockerfile, YAML.
-# - Semgrep AI local: OWASP LLM, Agentic AI, RAG, MCP/tools, prompt leakage,
-#   prompt injection, excessive agency, output handling, eval/exec, SSRF, XSS,
-#   SQLi, deserialización y configuración insegura.
-# - CodeQL: análisis semántico cuando esté disponible.
-# - Trivy + pip-audit: SCA y filesystem scan.
-# - Gitleaks: secretos.
-# - Checkov: IaC.
-# - AI Policy Compliance: reglas locales de cumplimiento LLM/agentes.
-# - OWASP ZAP: opcional si existe DAST_TARGET_URL.
-# ==============================================================================
+
 
 on:
   push:
