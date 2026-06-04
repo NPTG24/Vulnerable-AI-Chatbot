@@ -837,7 +837,7 @@ jobs:
   # JOB 6: AI POLICY COMPLIANCE — LOCAL LLM / AGENTIC GOVERNANCE
   # ============================================================================
   # Reglas locales sin OPA externo y sin dependencias SaaS.
-  # Corregido para evitar contaminación por URLDefense al copiar desde correos.
+  # Corregido: no usa https://urldefense.com/v3/__http://file_path.parts__;!!P110LumUDw!9YjQ-aOJPzSsT05kdA1suxJjr7F7_GVJI16SK17iEsC3HdEmI5_TvjTeBRFn814Cn4J-UCji2GHETsZmOgMJniqmuzUeKQ$  para evitar contaminación por URLDefense/SafeLinks.
   # ============================================================================
 
   ai-policy-compliance:
@@ -850,6 +850,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Detect corporate URL rewriting in workflow
+        continue-on-error: true
+        run: |
+          if grep -R "urldefense.com\|https://urldefense.com/v3/__http://safelinks.protection.outlook.com__;!!P110LumUDw!9YjQ-aOJPzSsT05kdA1suxJjr7F7_GVJI16SK17iEsC3HdEmI5_TvjTeBRFn814Cn4J-UCji2GHETsZmOgMJnip7F0Pw_A$ " .github/workflows/ 2>/dev/null; then
+            echo "Corporate URL rewriting detected inside workflow files. Review copied YAML."
+          else
+            echo "No corporate URL rewriting detected in workflow files."
+          fi
 
       - name: Run AI compliance static policies
         continue-on-error: true
@@ -880,11 +889,16 @@ jobs:
                   "message": message,
               })
 
-          def should_skip_file(file_path):
-              path_parts = list(https://urldefense.com/v3/__http://file_path.parts__;!!P110LumUDw!-v74OprsS1uPbqMRLwH3ZmX6-k0lQzq8Ycxvlsv0rqWa0S215RVL1KkAClbwVc_GA5VnujBEtEs_V9sli7k_BVWFw2SPeA$ )
-              for item in path_parts:
-                  if item in skip_dirs:
+          def should_skip_file(candidate_path):
+              # Evita usar https://urldefense.com/v3/__http://candidate_path.parts__;!!P110LumUDw!9YjQ-aOJPzSsT05kdA1suxJjr7F7_GVJI16SK17iEsC3HdEmI5_TvjTeBRFn814Cn4J-UCji2GHETsZmOgMJniq8Fbaq6A$  porque algunos entornos corporativos
+              # reescriben patrones tipo https://urldefense.com/v3/__http://file_path.parts__;!!P110LumUDw!9YjQ-aOJPzSsT05kdA1suxJjr7F7_GVJI16SK17iEsC3HdEmI5_TvjTeBRFn814Cn4J-UCji2GHETsZmOgMJniqmuzUeKQ$  como URLDefense/SafeLinks.
+              normalized_path = str(candidate_path).replace("\\", "/")
+              segments = normalized_path.split("/")
+
+              for segment in segments:
+                  if segment in skip_dirs:
                       return True
+
               return False
 
           checks = [
