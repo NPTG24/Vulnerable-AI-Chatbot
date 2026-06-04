@@ -3,24 +3,41 @@ name: Security Pipeline
 # ==============================================================================
 # SECURITY PIPELINE
 # ==============================================================================
-# Cambios solicitados:
-# - Eliminado Promptfoo.
-# - Eliminado LLM Guard.
-# - Fortalecido Semgrep para AI, OWASP LLM, agentes, configuración y desarrollo seguro.
-# - Agregado CodeQL para análisis semántico de código.
-# - Agregado AI Policy Compliance estático para controles de LLM/agentes.
-# - Ningún scanner intermedio detiene el pipeline.
-# - El reporte final centraliza todos los hallazgos.
-# - Por defecto el pipeline no falla por hallazgos: fail_on=never.
+# Entorno objetivo:
+# - Repositorio GitHub con código fuente.
+# - Entorno empresarial cerrado/restringido.
+# - Sin Promptfoo.
+# - Sin LLM Guard.
+# - Sin dependencias SaaS externas para AI Security.
+# - Sin upload-sarif manual a GitHub Code Scanning.
+# - Todos los resultados se guardan como artifacts.
+# - El reporte central se genera siempre.
+# - Por defecto NO falla por hallazgos: fail_on=never.
+#
+# Cobertura:
+# - Ruff: lint y formato.
+# - Semgrep general: AppSec, OWASP Top 10, secrets, Dockerfile, YAML.
+# - Semgrep AI local: OWASP LLM, Agentic AI, RAG, MCP/tools, prompt leakage,
+#   prompt injection, excessive agency, output handling, eval/exec, SSRF, XSS,
+#   SQLi, deserialización y configuración insegura.
+# - CodeQL: análisis semántico cuando esté disponible.
+# - Trivy + pip-audit: SCA y filesystem scan.
+# - Gitleaks: secretos.
+# - Checkov: IaC.
+# - AI Policy Compliance: reglas locales de cumplimiento LLM/agentes.
+# - OWASP ZAP: opcional si existe DAST_TARGET_URL.
 # ==============================================================================
 
 on:
   push:
     branches: [main, master]
+
   pull_request:
     branches: [main, master]
+
   schedule:
     - cron: "0 2 * * 1"
+
   workflow_dispatch:
     inputs:
       run_dast:
@@ -29,6 +46,7 @@ on:
         default: "false"
         type: choice
         options: ["true", "false"]
+
       fail_on:
         description: "Final report failure threshold"
         required: false
@@ -55,8 +73,10 @@ jobs:
   dependency-policy:
     name: "Policy — Dependency Pinning"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -65,22 +85,66 @@ jobs:
         continue-on-error: true
         run: |
           python3 - <<'PY'
-          import json, pathlib, re
-          req_files = sorted({*pathlib.Path(".").glob("requirements*.txt"), *pathlib.Path(".").glob("**/requirements*.txt")})
-          skip = re.compile(r"^\s*($|\#|-r\s+|-c\s+|-f\s+|--|(https?|git|ssh)://|file:)", re.I)
-          exact = re.compile(r"^[A-Za-z0-9_.-]+(\[[A-Za-z0-9_,.-]+\])?\s*==\s*[A-Za-z0-9_.!+*-]+.*$")
+          import json
+          import pathlib
+          import re
+
+          req_files = sorted({
+              *pathlib.Path(".").glob("requirements*.txt"),
+              *pathlib.Path(".").glob("**/requirements*.txt"),
+          })
+
+          skip = re.compile(
+              r"^\s*($|\#|-r\s+|-c\s+|-f\s+|--|(https?|git|ssh)://|file:)",
+              re.IGNORECASE,
+          )
+
+          exact = re.compile(
+              r"^[A-Za-z0-9_.-]+(\[[A-Za-z0-9_,.-]+\])?\s*==\s*[A-Za-z0-9_.!+*-]+.*$"
+          )
+
           findings = []
+
           for req in req_files:
               for lineno, raw in enumerate(req.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
                   line = raw.strip()
+
                   if skip.match(line):
                       continue
+
                   clean = line.split(" #", 1)[0].strip()
+
                   if not exact.match(clean):
-                      findings.append({"tool":"Dependency Pinning Policy","severity":"medium","rule":"UNPINNED_DEPENDENCY","file":str(req),"line":lineno,"message":f"Dependencia sin pin exacto: {line}"})
-          pathlib.Path("dependency_policy_findings.json").write_text(json.dumps({"tool":"Dependency Pinning Policy","findings":findings}, indent=2, ensure_ascii=False), encoding="utf-8")
+                      findings.append({
+                          "tool": "Dependency Pinning Policy",
+                          "severity": "medium",
+                          "rule": "UNPINNED_DEPENDENCY",
+                          "file": str(req),
+                          "line": lineno,
+                          "message": f"Dependencia sin pin exacto: {line}",
+                      })
+
+          pathlib.Path("dependency_policy_findings.json").write_text(
+              json.dumps(
+                  {
+                      "tool": "Dependency Pinning Policy",
+                      "findings": findings,
+                  },
+                  indent=2,
+                  ensure_ascii=False,
+              ),
+              encoding="utf-8",
+          )
+
           print(f"Dependency policy findings: {len(findings)}")
           PY
+
+      - name: Ensure dependency policy artifact exists
+        if: always()
+        run: |
+          if [ ! -f dependency_policy_findings.json ]; then
+            echo '{"tool":"Dependency Pinning Policy","findings":[]}' > dependency_policy_findings.json
+          fi
 
       - name: Upload dependency policy artifact
         if: always()
@@ -97,8 +161,10 @@ jobs:
   ruff:
     name: "Lint — Ruff"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -109,6 +175,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Ruff
+        continue-on-error: true
         run: |
           python -m pip install --upgrade pip
           pip install ruff
@@ -120,7 +187,13 @@ jobs:
           ruff check . --output-format=full > ruff_lint_full.txt || true
           ruff check . --output-format=github || true
           ruff format . --check --diff > ruff_format_diff.txt || true
-          touch ruff_lint.json ruff_lint_full.txt ruff_format_diff.txt
+
+      - name: Ensure Ruff artifacts exist
+        if: always()
+        run: |
+          touch ruff_lint.json
+          touch ruff_lint_full.txt
+          touch ruff_format_diff.txt
 
       - name: Upload Ruff reports
         if: always()
@@ -136,18 +209,24 @@ jobs:
   # ============================================================================
   # JOB 3: SAST — CODEQL
   # ============================================================================
+  # CodeQL puede requerir permisos/capacidades de GitHub Advanced Security.
+  # Por eso se deja con continue-on-error.
+  # ============================================================================
 
   codeql:
     name: "SAST — CodeQL"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       security-events: write
       actions: read
+
     strategy:
       fail-fast: false
       matrix:
         language: [python, javascript-typescript]
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -176,7 +255,9 @@ jobs:
           {
             "tool": "CodeQL",
             "language": "${{ matrix.language }}",
-            "note": "CodeQL results are available in GitHub Code Scanning when findings exist."
+            "severity": "info",
+            "rule": "CODEQL_EXECUTION",
+            "message": "CodeQL fue ejecutado o intentado. Si GitHub Code Scanning está habilitado, los hallazgos aparecerán en la pestaña Security."
           }
           JSON
 
@@ -195,10 +276,11 @@ jobs:
   sast-semgrep:
     name: "SAST — Semgrep General Security"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
-      security-events: write
       actions: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -211,6 +293,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Semgrep
+        continue-on-error: true
         run: |
           python -m pip install --upgrade pip
           pip install semgrep
@@ -230,6 +313,7 @@ jobs:
             --sarif \
             --output semgrep.sarif \
             . || true
+
           semgrep \
             --config p/python \
             --config p/javascript \
@@ -242,16 +326,17 @@ jobs:
             --json \
             --output semgrep.json \
             . || true
-          if [ ! -f semgrep.sarif ]; then echo '{"version":"2.1.0","runs":[]}' > semgrep.sarif; fi
-          if [ ! -f semgrep.json ]; then echo '{"results":[]}' > semgrep.json; fi
 
-      - name: Upload Semgrep SARIF
+      - name: Ensure Semgrep general artifacts exist
         if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: semgrep.sarif
-          category: semgrep-general-security
+        run: |
+          if [ ! -f semgrep.sarif ]; then
+            echo '{"version":"2.1.0","runs":[]}' > semgrep.sarif
+          fi
+
+          if [ ! -f semgrep.json ]; then
+            echo '{"results":[]}' > semgrep.json
+          fi
 
       - name: Upload Semgrep artifacts
         if: always()
@@ -264,16 +349,19 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # JOB 5: AI SAST — OWASP LLM + AGENTIC AI + SECURE DEVELOPMENT
+  # JOB 5: AI SAST — OWASP LLM + AGENTIC AI + SECURE CODE
+  # ============================================================================
+  # Reglas locales para evitar dependencia de servicios externos.
   # ============================================================================
 
   ai-sast-semgrep:
     name: "AI SAST — OWASP LLM Agentic Secure Code"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
-      security-events: write
       actions: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -286,13 +374,15 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Semgrep
+        continue-on-error: true
         run: |
           python -m pip install --upgrade pip
           pip install semgrep
 
-      - name: Create AI security Semgrep rules
+      - name: Create local AI Semgrep rules
         run: |
           mkdir -p .semgrep/ai-security
+
           cat > .semgrep/ai-security/ai_llm_agentic_secure_code.yml <<'YAML'
           rules:
             - id: ai-llm01-python-user-input-in-prompt
@@ -302,7 +392,6 @@ jobs:
               metadata:
                 category: security
                 owasp_llm: LLM01 Prompt Injection
-                confidence: medium
                 technology: [ai, llm, prompt-injection]
               patterns:
                 - pattern-either:
@@ -325,7 +414,6 @@ jobs:
               metadata:
                 category: security
                 owasp_llm: LLM01 Prompt Injection
-                confidence: medium
                 technology: [ai, llm, prompt-injection]
               pattern-either:
                 - pattern: |
@@ -346,7 +434,6 @@ jobs:
               metadata:
                 category: security
                 owasp_llm: LLM02 Sensitive Information Disclosure
-                confidence: medium
                 technology: [ai, llm, privacy]
               pattern-either:
                 - pattern: |
@@ -367,7 +454,6 @@ jobs:
               metadata:
                 category: security
                 owasp_llm: LLM02 Sensitive Information Disclosure
-                confidence: medium
                 technology: [ai, llm, privacy]
               pattern-either:
                 - pattern: |
@@ -382,11 +468,10 @@ jobs:
             - id: ai-llm03-python-ai-framework-detected
               languages: [python]
               severity: INFO
-              message: "OWASP LLM03 Supply Chain: framework AI/LLM detectado. Revisar versión, origen, permisos, CVEs y controles de actualización."
+              message: "OWASP LLM03 Supply Chain: framework AI/LLM detectado. Revisar versión, origen, permisos y CVEs."
               metadata:
                 category: security
                 owasp_llm: LLM03 Supply Chain
-                confidence: low
                 technology: [ai, llm, supply-chain]
               pattern-either:
                 - pattern: import openai
@@ -403,11 +488,10 @@ jobs:
             - id: ai-llm03-js-ai-framework-detected
               languages: [javascript, typescript]
               severity: INFO
-              message: "OWASP LLM03 Supply Chain: SDK/framework AI detectado. Revisar versión, origen, CVEs y permisos."
+              message: "OWASP LLM03 Supply Chain: SDK/framework AI detectado. Revisar versión, origen y CVEs."
               metadata:
                 category: security
                 owasp_llm: LLM03 Supply Chain
-                confidence: low
                 technology: [ai, llm, supply-chain]
               pattern-either:
                 - pattern: |
@@ -426,11 +510,10 @@ jobs:
             - id: ai-llm04-python-rag-poisoning-ingestion
               languages: [python]
               severity: WARNING
-              message: "OWASP LLM04/LLM08: posible RAG poisoning o debilidad vectorial. Validar origen, sanitización, aislamiento por tenant y metadata."
+              message: "OWASP LLM04/LLM08: posible RAG poisoning o debilidad vectorial. Validar origen, sanitización, tenant y metadata."
               metadata:
                 category: security
                 owasp_llm: LLM04 Data and Model Poisoning / LLM08 Vector and Embedding Weaknesses
-                confidence: medium
                 technology: [ai, llm, rag, vector-db]
               pattern-either:
                 - pattern: $DB.add_documents($DOCS, ...)
@@ -443,11 +526,10 @@ jobs:
             - id: ai-llm04-js-rag-poisoning-ingestion
               languages: [javascript, typescript]
               severity: WARNING
-              message: "OWASP LLM04/LLM08: posible RAG poisoning o debilidad vectorial. Validar origen, sanitización, aislamiento por tenant y metadata."
+              message: "OWASP LLM04/LLM08: posible RAG poisoning o debilidad vectorial. Validar origen, sanitización, tenant y metadata."
               metadata:
                 category: security
                 owasp_llm: LLM04 Data and Model Poisoning / LLM08 Vector and Embedding Weaknesses
-                confidence: medium
                 technology: [ai, llm, rag, vector-db]
               pattern-either:
                 - pattern: |
@@ -466,7 +548,6 @@ jobs:
               metadata:
                 category: security
                 owasp_llm: LLM05 Improper Output Handling
-                confidence: medium
                 technology: [ai, llm, sql-injection]
               pattern-either:
                 - pattern: $CUR.execute(f"...{$X}...")
@@ -476,11 +557,10 @@ jobs:
             - id: ai-llm05-js-output-used-in-html
               languages: [javascript, typescript]
               severity: WARNING
-              message: "OWASP LLM05 Improper Output Handling: contenido variable renderizado como HTML. Revisar XSS por salida de LLM."
+              message: "OWASP LLM05 Improper Output Handling: contenido variable renderizado como HTML. Revisar XSS."
               metadata:
                 category: security
                 owasp_llm: LLM05 Improper Output Handling
-                confidence: medium
                 technology: [ai, llm, xss]
               pattern-either:
                 - pattern: |
@@ -491,11 +571,10 @@ jobs:
             - id: ai-llm05-python-dangerous-eval-exec
               languages: [python]
               severity: ERROR
-              message: "OWASP LLM05/LLM06: uso de eval/exec. Si procesa input o salida de LLM puede permitir ejecución arbitraria."
+              message: "OWASP LLM05/LLM06: uso de eval/exec. Riesgo de ejecución arbitraria."
               metadata:
                 category: security
                 owasp_llm: LLM05 Improper Output Handling / LLM06 Excessive Agency
-                confidence: high
                 technology: [ai, llm, agent, rce]
               pattern-either:
                 - pattern: eval($X)
@@ -504,11 +583,10 @@ jobs:
             - id: ai-llm05-js-dynamic-code-execution
               languages: [javascript, typescript]
               severity: ERROR
-              message: "OWASP LLM05/LLM06: ejecución dinámica de código. Riesgo crítico si procesa input o salida de LLM."
+              message: "OWASP LLM05/LLM06: ejecución dinámica de código. Riesgo crítico."
               metadata:
                 category: security
                 owasp_llm: LLM05 Improper Output Handling / LLM06 Excessive Agency
-                confidence: high
                 technology: [ai, llm, agent, rce]
               pattern-either:
                 - pattern: eval($X)
@@ -517,11 +595,10 @@ jobs:
             - id: ai-llm06-python-agent-shell-tool
               languages: [python]
               severity: ERROR
-              message: "OWASP LLM06 Excessive Agency: agente/tool con ejecución de comandos del sistema. Revisar command injection, allowlist y aprobación humana."
+              message: "OWASP LLM06 Excessive Agency: agente/tool con ejecución de comandos del sistema."
               metadata:
                 category: security
                 owasp_llm: LLM06 Excessive Agency
-                confidence: high
                 technology: [ai, llm, agent, tool-abuse, command-injection]
               pattern-either:
                 - pattern: subprocess.run($CMD, shell=True, ...)
@@ -532,11 +609,10 @@ jobs:
             - id: ai-llm06-js-agent-shell-tool
               languages: [javascript, typescript]
               severity: ERROR
-              message: "OWASP LLM06 Excessive Agency: agente/tool con ejecución de comandos del sistema. Revisar command injection, allowlist y aprobación humana."
+              message: "OWASP LLM06 Excessive Agency: agente/tool con ejecución de comandos del sistema."
               metadata:
                 category: security
                 owasp_llm: LLM06 Excessive Agency
-                confidence: high
                 technology: [ai, llm, agent, tool-abuse, command-injection]
               pattern-either:
                 - pattern: child_process.exec($CMD, ...)
@@ -547,11 +623,10 @@ jobs:
             - id: ai-agent-python-broad-tool-permissions
               languages: [python]
               severity: WARNING
-              message: "Agentic AI: tool/agente detectado. Revisar permisos, allowlist, validación de argumentos, rate limit, auditoría y aprobación humana."
+              message: "Agentic AI: tool/agente detectado. Revisar permisos, allowlist, validación, auditoría y aprobación humana."
               metadata:
                 category: security
                 owasp_agentic: Excessive Tool Permissions / Tool Abuse
-                confidence: medium
                 technology: [ai, agent, tools]
               pattern-either:
                 - pattern: Tool(..., func=$FUNC, ...)
@@ -564,11 +639,10 @@ jobs:
             - id: ai-agent-js-tool-or-function-calling
               languages: [javascript, typescript]
               severity: WARNING
-              message: "Agentic AI: tool/function calling detectado. Revisar permisos, validación de argumentos, auditoría y aprobación humana."
+              message: "Agentic AI: tool/function calling detectado. Revisar permisos, validación, auditoría y aprobación humana."
               metadata:
                 category: security
                 owasp_agentic: Tool Abuse / Excessive Agency
-                confidence: medium
                 technology: [ai, agent, tools]
               pattern-either:
                 - pattern: |
@@ -581,11 +655,10 @@ jobs:
             - id: ai-llm07-python-system-prompt-hardcoded
               languages: [python]
               severity: INFO
-              message: "OWASP LLM07 System Prompt Leakage: system prompt hardcodeado. Revisar fuga de instrucciones internas, logs y exposición."
+              message: "OWASP LLM07 System Prompt Leakage: system prompt hardcodeado."
               metadata:
                 category: security
                 owasp_llm: LLM07 System Prompt Leakage
-                confidence: low
                 technology: [ai, llm, prompt-leakage]
               pattern-either:
                 - pattern: |
@@ -600,11 +673,10 @@ jobs:
             - id: ai-llm07-js-system-prompt-hardcoded
               languages: [javascript, typescript]
               severity: INFO
-              message: "OWASP LLM07 System Prompt Leakage: system prompt hardcodeado. Revisar fuga de instrucciones internas, logs y exposición."
+              message: "OWASP LLM07 System Prompt Leakage: system prompt hardcodeado."
               metadata:
                 category: security
                 owasp_llm: LLM07 System Prompt Leakage
-                confidence: low
                 technology: [ai, llm, prompt-leakage]
               pattern-either:
                 - pattern: |
@@ -619,11 +691,10 @@ jobs:
             - id: ai-llm09-python-unsafe-auto-approve
               languages: [python]
               severity: WARNING
-              message: "OWASP LLM09 Misinformation/Unsafe Reliance: posible confianza excesiva en salida de LLM para decisión o acción sensible."
+              message: "OWASP LLM09: posible confianza excesiva en salida de LLM para decisión o acción sensible."
               metadata:
                 category: security
-                owasp_llm: LLM09 Misinformation
-                confidence: medium
+                owasp_llm: LLM09 Misinformation / Unsafe Reliance
                 technology: [ai, llm, decision-automation]
               pattern-either:
                 - pattern: |
@@ -636,11 +707,10 @@ jobs:
             - id: ai-llm10-python-unbounded-consumption
               languages: [python]
               severity: WARNING
-              message: "OWASP LLM10 Unbounded Consumption: llamada a LLM sin límites evidentes. Revisar max_tokens, timeout, rate limit, budget y retries."
+              message: "OWASP LLM10 Unbounded Consumption: llamada LLM sin límites evidentes. Revisar max_tokens, timeout, rate limit y budget."
               metadata:
                 category: security
                 owasp_llm: LLM10 Unbounded Consumption
-                confidence: medium
                 technology: [ai, llm, dos, cost]
               pattern-either:
                 - pattern: $CLIENT.chat.completions.create(...)
@@ -651,11 +721,10 @@ jobs:
             - id: ai-llm10-js-unbounded-consumption
               languages: [javascript, typescript]
               severity: WARNING
-              message: "OWASP LLM10 Unbounded Consumption: llamada a LLM sin límites evidentes. Revisar max_tokens, timeout, rate limit, budget y retries."
+              message: "OWASP LLM10 Unbounded Consumption: llamada LLM sin límites evidentes. Revisar max_tokens, timeout, rate limit y budget."
               metadata:
                 category: security
                 owasp_llm: LLM10 Unbounded Consumption
-                confidence: medium
                 technology: [ai, llm, dos, cost]
               pattern-either:
                 - pattern: |
@@ -668,11 +737,10 @@ jobs:
             - id: devsec-python-unsafe-deserialization
               languages: [python]
               severity: ERROR
-              message: "Deserialización insegura: pickle/yaml load puede permitir ejecución arbitraria con input no confiable."
+              message: "Deserialización insegura: pickle/yaml load puede permitir ejecución arbitraria."
               metadata:
                 category: security
                 cwe: CWE-502
-                confidence: high
               pattern-either:
                 - pattern: pickle.loads($X)
                 - pattern: pickle.load($X)
@@ -681,11 +749,10 @@ jobs:
             - id: devsec-python-ssrf-requests-variable-url
               languages: [python]
               severity: WARNING
-              message: "Posible SSRF: request HTTP construido con variable. Validar allowlist de dominios y bloquear direcciones internas."
+              message: "Posible SSRF: request HTTP construido con variable. Validar allowlist de dominios."
               metadata:
                 category: security
                 cwe: CWE-918
-                confidence: medium
               pattern-either:
                 - pattern: requests.get($URL, ...)
                 - pattern: requests.post($URL, ...)
@@ -695,11 +762,10 @@ jobs:
             - id: devsec-js-fetch-variable-url
               languages: [javascript, typescript]
               severity: WARNING
-              message: "Posible SSRF o request inseguro: fetch/axios con URL variable. Validar allowlist de dominios."
+              message: "Posible SSRF o request inseguro: fetch/axios con URL variable."
               metadata:
                 category: security
                 cwe: CWE-918
-                confidence: medium
               pattern-either:
                 - pattern: |
                     fetch($URL, ...)
@@ -714,7 +780,6 @@ jobs:
               message: "Configuración insegura: debug habilitado. No usar debug=True en producción."
               metadata:
                 category: security
-                confidence: high
               pattern-either:
                 - pattern: app.run(..., debug=True, ...)
                 - pattern: Flask(..., debug=True, ...)
@@ -722,10 +787,9 @@ jobs:
             - id: config-cors-wildcard-js
               languages: [javascript, typescript]
               severity: WARNING
-              message: "Configuración insegura: CORS wildcard. Revisar origen permitido, credenciales y exposición de APIs."
+              message: "Configuración insegura: CORS wildcard. Revisar origen permitido y credenciales."
               metadata:
                 category: security
-                confidence: medium
               pattern-either:
                 - pattern: |
                     cors({ origin: "*" })
@@ -733,23 +797,24 @@ jobs:
                     "Access-Control-Allow-Origin": "*"
           YAML
 
-      - name: Run Semgrep AI official and local rules
+      - name: Run local AI Semgrep rules
         continue-on-error: true
         run: |
           semgrep \
-            --config p/ai-best-practices \
             --config .semgrep/ai-security \
             --sarif \
             --output semgrep_ai.sarif \
             . || true
 
           semgrep \
-            --config p/ai-best-practices \
             --config .semgrep/ai-security \
             --json \
             --output semgrep_ai.json \
             . || true
 
+      - name: Ensure Semgrep AI artifacts exist
+        if: always()
+        run: |
           if [ ! -f semgrep_ai.sarif ]; then
             echo '{"version":"2.1.0","runs":[]}' > semgrep_ai.sarif
           fi
@@ -757,14 +822,6 @@ jobs:
           if [ ! -f semgrep_ai.json ]; then
             echo '{"results":[]}' > semgrep_ai.json
           fi
-
-      - name: Upload Semgrep AI SARIF
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: semgrep_ai.sarif
-          category: semgrep-ai-llm-agentic-secure-code
 
       - name: Upload Semgrep AI artifacts
         if: always()
@@ -777,14 +834,19 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # JOB 6: AI POLICY COMPLIANCE — LLM / AGENTIC GOVERNANCE
+  # JOB 6: AI POLICY COMPLIANCE — LOCAL LLM / AGENTIC GOVERNANCE
+  # ============================================================================
+  # Reglas locales sin OPA externo y sin dependencias SaaS.
+  # Corregido para evitar contaminación por URLDefense al copiar desde correos.
   # ============================================================================
 
   ai-policy-compliance:
     name: "AI Compliance — LLM Agentic Policies"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -793,59 +855,157 @@ jobs:
         continue-on-error: true
         run: |
           python3 - <<'PY'
-          import json, pathlib, re
+          import json
+          import pathlib
+          import re
 
-          include_ext = {".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml", ".toml"}
-          skip_dirs = {".git", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".mypy_cache", ".pytest_cache"}
+          include_ext = {
+              ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml", ".toml"
+          }
+
+          skip_dirs = {
+              ".git", "node_modules", ".venv", "venv", "dist", "build",
+              "__pycache__", ".mypy_cache", ".pytest_cache"
+          }
+
           findings = []
 
-          def add(severity, rule, file, line, message):
-              findings.append({"tool":"AI Policy Compliance","severity":severity,"rule":rule,"file":str(file),"line":line,"message":message})
+          def add(severity, rule, file_path, line, message):
+              findings.append({
+                  "tool": "AI Policy Compliance",
+                  "severity": severity,
+                  "rule": rule,
+                  "file": str(file_path),
+                  "line": line,
+                  "message": message,
+              })
 
-          def should_skip(path):
-              return any(part in skip_dirs for part in https://urldefense.com/v3/__http://path.parts__;!!P110LumUDw!5UBFf7MdX4HHs5gYxUoSgAaqcIcUCZ-55Bis3nov94ZDaI-ALoHOREZENcibvp0WztFJA5gb44cJVISv6W7x2IMlOQuuUQ$ )
+          def should_skip_file(file_path):
+              path_parts = list(https://urldefense.com/v3/__http://file_path.parts__;!!P110LumUDw!-v74OprsS1uPbqMRLwH3ZmX6-k0lQzq8Ycxvlsv0rqWa0S215RVL1KkAClbwVc_GA5VnujBEtEs_V9sli7k_BVWFw2SPeA$ )
+              for item in path_parts:
+                  if item in skip_dirs:
+                      return True
+              return False
 
-          patterns = [
-              ("high", "AGENT_SHELL_TOOL", re.compile(r"(subprocess|os\.system|child_process|execSync|exec\(|shell=True)", re.I), "Agente o código con capacidad de shell/comandos. Requiere allowlist, validación y aprobación humana."),
-              ("medium", "SYSTEM_PROMPT_HARDCODED", re.compile(r"(role\s*[:=]\s*['\"]system['\"]|system_prompt|developer_message)", re.I), "System/developer prompt detectado. Revisar fuga de instrucciones internas y logging."),
-              ("medium", "TOOL_CALLING_OR_AGENT", re.compile(r"(tools\s*[:=]|tool_choice|function_call|AgentExecutor|initialize_agent|StructuredTool|Crew\(|AutoGen|autogen|crewai)", re.I), "Tool calling o agente detectado. Revisar permisos, allowlist, auditoría y acciones destructivas."),
-              ("medium", "RAG_VECTORSTORE", re.compile(r"(vectorstore|add_documents|add_texts|from_documents|embedding|retriever|similarity_search|pinecone|chroma|faiss)", re.I), "RAG/vectorstore detectado. Revisar poisoning, aislamiento por tenant, metadata y sanitización."),
-              ("medium", "LLM_CALL_LIMITS", re.compile(r"(chat\.completions\.create|responses\.create|ChatCompletion\.create|model\.invoke|llm\.invoke)", re.I), "Llamada LLM detectada. Verificar max_tokens, timeout, rate limit, budget y retries."),
-              ("medium", "PROMPT_LOGGING", re.compile(r"(print\(.{0,80}(prompt|message|response)|console\.log\(.{0,80}(prompt|message|response)|logger\..{0,80}(prompt|message|response))", re.I), "Posible logging de prompts/respuestas. Revisar exposición de datos sensibles."),
-              ("high", "UNSAFE_DYNAMIC_CODE", re.compile(r"(eval\(|exec\(|new Function\()", re.I), "Ejecución dinámica de código. Riesgo alto si procesa input externo o salida de LLM."),
+          checks = [
+              (
+                  "high",
+                  "AGENT_SHELL_TOOL",
+                  re.compile(r"(subprocess|os\.system|child_process|execSync|exec\(|shell=True)", re.I),
+                  "Agente o código con capacidad de shell/comandos. Requiere allowlist, validación y aprobación humana."
+              ),
+              (
+                  "medium",
+                  "SYSTEM_PROMPT_HARDCODED",
+                  re.compile(r"(role\s*[:=]\s*['\"]system['\"]|system_prompt|developer_message)", re.I),
+                  "System/developer prompt detectado. Revisar fuga de instrucciones internas y logging."
+              ),
+              (
+                  "medium",
+                  "TOOL_CALLING_OR_AGENT",
+                  re.compile(r"(tools\s*[:=]|tool_choice|function_call|AgentExecutor|initialize_agent|StructuredTool|Crew\(|AutoGen|autogen|crewai)", re.I),
+                  "Tool calling o agente detectado. Revisar permisos, allowlist, auditoría y acciones destructivas."
+              ),
+              (
+                  "medium",
+                  "RAG_VECTORSTORE",
+                  re.compile(r"(vectorstore|add_documents|add_texts|from_documents|embedding|retriever|similarity_search|pinecone|chroma|faiss)", re.I),
+                  "RAG/vectorstore detectado. Revisar poisoning, aislamiento por tenant, metadata y sanitización."
+              ),
+              (
+                  "medium",
+                  "LLM_CALL_LIMITS",
+                  re.compile(r"(chat\.completions\.create|responses\.create|ChatCompletion\.create|model\.invoke|llm\.invoke)", re.I),
+                  "Llamada LLM detectada. Verificar max_tokens, timeout, rate limit, budget y retries."
+              ),
+              (
+                  "medium",
+                  "PROMPT_LOGGING",
+                  re.compile(r"(print\(.{0,80}(prompt|message|response)|console\.log\(.{0,80}(prompt|message|response)|logger\..{0,80}(prompt|message|response))", re.I),
+                  "Posible logging de prompts/respuestas. Revisar exposición de datos sensibles."
+              ),
+              (
+                  "high",
+                  "UNSAFE_DYNAMIC_CODE",
+                  re.compile(r"(eval\(|exec\(|new Function\()", re.I),
+                  "Ejecución dinámica de código. Riesgo alto si procesa input externo o salida de LLM."
+              ),
           ]
 
-          for path in pathlib.Path(".").rglob("*"):
-              if not path.is_file() or should_skip(path) or path.suffix.lower() not in include_ext:
+          for file_path in pathlib.Path(".").rglob("*"):
+              if not file_path.is_file():
                   continue
+
+              if should_skip_file(file_path):
+                  continue
+
+              if file_path.suffix.lower() not in include_ext:
+                  continue
+
               try:
-                  lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+                  lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
               except Exception:
                   continue
+
               text = "\n".join(lines)
-
-              for severity, rule, regex, message in patterns:
-                  for idx, line in enumerate(lines, 1):
-                      if regex.search(line):
-                          add(severity, rule, path, idx, message)
-
               lower = text.lower()
+
+              for severity, rule, regex, message in checks:
+                  for line_number, line_text in enumerate(lines, 1):
+                      if regex.search(line_text):
+                          add(severity, rule, file_path, line_number, message)
 
               if re.search(r"(chat\.completions\.create|responses\.create|ChatCompletion\.create|model\.invoke|llm\.invoke)", text, re.I):
                   if "max_tokens" not in lower and "timeout" not in lower and "rate_limit" not in lower and "ratelimit" not in lower:
-                      add("medium", "LLM_NO_OBVIOUS_LIMITS", path, 1, "Archivo contiene llamadas LLM sin señales evidentes de max_tokens, timeout o rate limiting.")
+                      add(
+                          "medium",
+                          "LLM_NO_OBVIOUS_LIMITS",
+                          file_path,
+                          1,
+                          "Archivo contiene llamadas LLM sin señales evidentes de max_tokens, timeout o rate limiting."
+                      )
 
               if re.search(r"(tools\s*[:=]|tool_choice|function_call|AgentExecutor|initialize_agent|StructuredTool)", text, re.I):
                   if "allowlist" not in lower and "approval" not in lower and "human" not in lower and "confirm" not in lower:
-                      add("high", "AGENT_NO_OBVIOUS_APPROVAL_OR_ALLOWLIST", path, 1, "Archivo contiene tools/agente sin señales evidentes de allowlist o aprobación humana.")
+                      add(
+                          "high",
+                          "AGENT_NO_OBVIOUS_APPROVAL_OR_ALLOWLIST",
+                          file_path,
+                          1,
+                          "Archivo contiene tools/agente sin señales evidentes de allowlist o aprobación humana."
+                      )
 
               if re.search(r"(add_documents|add_texts|from_documents|vectorstore|retriever)", text, re.I):
                   if "sanitize" not in lower and "metadata" not in lower and "tenant" not in lower and "source" not in lower:
-                      add("medium", "RAG_NO_OBVIOUS_SOURCE_VALIDATION", path, 1, "Archivo contiene RAG/vectorstore sin señales evidentes de sanitización, metadata, tenant o validación de fuente.")
+                      add(
+                          "medium",
+                          "RAG_NO_OBVIOUS_SOURCE_VALIDATION",
+                          file_path,
+                          1,
+                          "Archivo contiene RAG/vectorstore sin señales evidentes de sanitización, metadata, tenant o validación de fuente."
+                      )
 
-          pathlib.Path("ai_policy_findings.json").write_text(json.dumps({"tool":"AI Policy Compliance","findings":findings}, indent=2, ensure_ascii=False), encoding="utf-8")
+          pathlib.Path("ai_policy_findings.json").write_text(
+              json.dumps(
+                  {
+                      "tool": "AI Policy Compliance",
+                      "findings": findings,
+                  },
+                  indent=2,
+                  ensure_ascii=False,
+              ),
+              encoding="utf-8",
+          )
+
           print(f"AI policy findings: {len(findings)}")
           PY
+
+      - name: Ensure AI policy artifact exists
+        if: always()
+        run: |
+          if [ ! -f ai_policy_findings.json ]; then
+            echo '{"tool":"AI Policy Compliance","findings":[]}' > ai_policy_findings.json
+          fi
 
       - name: Upload AI policy artifacts
         if: always()
@@ -862,10 +1022,11 @@ jobs:
   sca-dependencies:
     name: "SCA — Trivy + pip-audit"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
-      security-events: write
       actions: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -883,6 +1044,7 @@ jobs:
         continue-on-error: true
         run: |
           python -m pip install --upgrade pip pip-audit
+
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt || true
           elif [ -f pyproject.toml ]; then
@@ -892,10 +1054,29 @@ jobs:
       - name: Run pip-audit
         continue-on-error: true
         run: |
-          pip-audit --format json --output pip_audit_results.json --progress-spinner off || true
-          pip-audit --format json --output pip_audit_osv.json --progress-spinner off --vulnerability-service osv || true
-          if [ ! -f pip_audit_results.json ]; then echo '[]' > pip_audit_results.json; fi
-          if [ ! -f pip_audit_osv.json ]; then echo '{"dependencies":[]}' > pip_audit_osv.json; fi
+          pip-audit \
+            --format json \
+            --output pip_audit_results.json \
+            --progress-spinner off \
+            || true
+
+          pip-audit \
+            --format json \
+            --output pip_audit_osv.json \
+            --progress-spinner off \
+            --vulnerability-service osv \
+            || true
+
+      - name: Ensure pip-audit artifacts exist
+        if: always()
+        run: |
+          if [ ! -f pip_audit_results.json ]; then
+            echo '[]' > pip_audit_results.json
+          fi
+
+          if [ ! -f pip_audit_osv.json ]; then
+            echo '{"dependencies":[]}' > pip_audit_osv.json
+          fi
 
       - name: Upload pip-audit artifacts
         if: always()
@@ -919,24 +1100,18 @@ jobs:
           exit-code: "0"
           ignore-unfixed: false
 
-      - name: Ensure Trivy SARIF exists
+      - name: Ensure Trivy artifact exists
         if: always()
         run: |
-          if [ ! -f trivy_results.sarif ]; then echo '{"version":"2.1.0","runs":[]}' > trivy_results.sarif; fi
-
-      - name: Upload Trivy SARIF
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy_results.sarif
-          category: trivy-sca
+          if [ ! -f trivy_results.sarif ]; then
+            echo '{"version":"2.1.0","runs":[]}' > trivy_results.sarif
+          fi
 
       - name: Upload Trivy artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-sarif
+          name: trivy-results
           path: trivy_results.sarif
           retention-days: 30
 
@@ -947,9 +1122,11 @@ jobs:
   secret-scan:
     name: "Secrets — Gitleaks"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       pull-requests: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -972,7 +1149,9 @@ jobs:
       - name: Ensure Gitleaks report exists
         if: always()
         run: |
-          if [ ! -f gitleaks_report.json ]; then echo "[]" > gitleaks_report.json; fi
+          if [ ! -f gitleaks_report.json ]; then
+            echo "[]" > gitleaks_report.json
+          fi
 
       - name: Upload Gitleaks artifact
         if: always()
@@ -989,10 +1168,11 @@ jobs:
   iac-checkov:
     name: "IaC — Checkov"
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
-      security-events: write
       actions: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -1010,16 +1190,13 @@ jobs:
       - name: Ensure Checkov reports exist
         if: always()
         run: |
-          if [ ! -f checkov_results.sarif ]; then echo '{"version":"2.1.0","runs":[]}' > checkov_results.sarif; fi
-          if [ ! -f checkov_results.json ]; then echo "{}" > checkov_results.json; fi
+          if [ ! -f checkov_results.sarif ]; then
+            echo '{"version":"2.1.0","runs":[]}' > checkov_results.sarif
+          fi
 
-      - name: Upload Checkov SARIF
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: checkov_results.sarif
-          category: checkov-iac
+          if [ ! -f checkov_results.json ]; then
+            echo "{}" > checkov_results.json
+          fi
 
       - name: Upload Checkov artifacts
         if: always()
@@ -1034,17 +1211,21 @@ jobs:
   # ============================================================================
   # JOB 10: DAST — OWASP ZAP BASELINE
   # ============================================================================
+  # Opcional. Solo corre si run_dast=true o schedule, y si existe DAST_TARGET_URL.
+  # ============================================================================
 
   dast-zap:
     name: "DAST — OWASP ZAP Baseline"
     runs-on: ubuntu-latest
+
     if: >-
       github.event_name == 'schedule' ||
       github.event.inputs.run_dast == 'true'
+
     permissions:
       contents: read
-      security-events: write
       issues: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -1075,8 +1256,14 @@ jobs:
       - name: Ensure ZAP artifacts exist
         if: always()
         run: |
-          if [ ! -f zap_report.html ]; then echo "<html><body><h1>ZAP skipped or no report generated</h1></body></html>" > zap_report.html; fi
-          if [ ! -f zap_report.json ]; then echo '{"site":[]}' > zap_report.json; fi
+          if [ ! -f zap_report.html ]; then
+            echo "<html><body><h1>ZAP skipped or no report generated</h1></body></html>" > zap_report.html
+          fi
+
+          if [ ! -f zap_report.json ]; then
+            echo '{"site":[]}' > zap_report.json
+          fi
+
           echo '{"version":"2.1.0","runs":[]}' > zap_results.sarif
 
       - name: Upload ZAP artifacts
@@ -1093,10 +1280,16 @@ jobs:
   # ============================================================================
   # JOB 11: SECURITY REPORT — CENTRALIZED VERDICT
   # ============================================================================
+  # Corregido:
+  # - Crea all_scan_results antes de descargar.
+  # - download-artifact tiene continue-on-error.
+  # - Genera siempre security_reports aunque no haya artefactos.
+  # ============================================================================
 
   security-report:
     name: "Security Report — Centralized Verdict"
     runs-on: ubuntu-latest
+
     needs:
       - dependency-policy
       - ruff
@@ -1108,161 +1301,356 @@ jobs:
       - secret-scan
       - iac-checkov
       - dast-zap
+
     if: always()
+
     permissions:
       contents: read
+
     steps:
+      - name: Create artifact directory
+        run: |
+          mkdir -p all_scan_results
+          mkdir -p security_reports
+
       - name: Download all artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           path: all_scan_results/
 
+      - name: Ensure artifact directory exists
+        if: always()
+        run: |
+          mkdir -p all_scan_results
+          mkdir -p security_reports
+
       - name: Generate centralized security report
         run: |
           python3 - <<'PY'
-          import json, pathlib
+          import json
+          import pathlib
           from html import escape
 
           root = pathlib.Path("all_scan_results")
-          out = pathlib.Path("security_reports")
-          out.mkdir(exist_ok=True)
+          output_dir = pathlib.Path("security_reports")
+          output_dir.mkdir(exist_ok=True)
+
+          report_txt = output_dir / "security_report_es.txt"
+          report_json = output_dir / "security_report_es.json"
+          report_html = output_dir / "security_report_es.html"
+
           severity_order = ["critical", "high", "medium", "low", "info", "unknown"]
-          grouped = {s: [] for s in severity_order}
+          grouped = {severity: [] for severity in severity_order}
 
-          def norm(v):
-              v = str(v or "").lower().strip()
-              return {"error":"high","warning":"medium","note":"low","none":"info","critical":"critical","high":"high","medium":"medium","moderate":"medium","low":"low","info":"info","informational":"info"}.get(v, "unknown")
+          def normalize_severity(value):
+              value = str(value or "").lower().strip()
+              mapping = {
+                  "error": "high",
+                  "warning": "medium",
+                  "note": "low",
+                  "none": "info",
+                  "critical": "critical",
+                  "high": "high",
+                  "medium": "medium",
+                  "moderate": "medium",
+                  "low": "low",
+                  "info": "info",
+                  "informational": "info",
+                  "unknown": "unknown",
+              }
+              return mapping.get(value, "unknown")
 
-          def add(tool, severity, rule, message, file="", line=""):
-              sev = norm(severity)
-              grouped.setdefault(sev, []).append({"tool":tool or "Unknown","severity":sev,"rule":rule or "unknown","message":str(message or "").strip(),"file":str(file or ""),"line":str(line or "")})
+          def add_finding(tool, severity, rule, message, file_path="", line=""):
+              sev = normalize_severity(severity)
+              grouped.setdefault(sev, []).append({
+                  "tool": tool or "Unknown",
+                  "severity": sev,
+                  "rule": rule or "unknown",
+                  "message": str(message or "").strip(),
+                  "file": str(file_path or ""),
+                  "line": str(line or ""),
+              })
 
-          def parse_sarif(path, fallback):
+          def parse_sarif(path, fallback_tool):
               try:
                   data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
               except Exception:
                   return
+
               for run in data.get("runs", []):
-                  tool = run.get("tool", {}).get("driver", {}).get("name", fallback)
+                  tool = run.get("tool", {}).get("driver", {}).get("name", fallback_tool)
                   rules = {}
+
                   for rule in run.get("tool", {}).get("driver", {}).get("rules", []):
-                      rid = rule.get("id", "unknown")
-                      rules[rid] = rule.get("defaultConfiguration", {}).get("level", "")
+                      rule_id = rule.get("id", "unknown")
+                      rules[rule_id] = rule.get("defaultConfiguration", {}).get("level", "")
+
                   for result in run.get("results", []):
-                      rid = result.get("ruleId", "unknown")
-                      level = result.get("level") or rules.get(rid) or "unknown"
-                      msg = result.get("message", {}).get("text", "")
-                      file_uri, line = "", ""
-                      locs = result.get("locations", [])
-                      if locs:
-                          physical = locs[0].get("physicalLocation", {})
+                      rule_id = result.get("ruleId", "unknown")
+                      level = result.get("level") or rules.get(rule_id) or "unknown"
+                      message = result.get("message", {}).get("text", "")
+                      file_uri = ""
+                      line = ""
+
+                      locations = result.get("locations", [])
+                      if locations:
+                          physical = locations[0].get("physicalLocation", {})
                           file_uri = physical.get("artifactLocation", {}).get("uri", "")
                           line = physical.get("region", {}).get("startLine", "")
-                      add(tool, level, rid, msg, file_uri, line)
+
+                      add_finding(tool, level, rule_id, message, file_uri, line)
 
           def parse_json_findings(path):
               try:
                   data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
               except Exception:
                   return
+
               for item in data.get("findings", []):
-                  add(item.get("tool"), item.get("severity"), item.get("rule"), item.get("message"), item.get("file"), item.get("line"))
+                  add_finding(
+                      item.get("tool", "Unknown"),
+                      item.get("severity", "unknown"),
+                      item.get("rule", "unknown"),
+                      item.get("message", ""),
+                      item.get("file", ""),
+                      item.get("line", ""),
+                  )
 
           def parse_ruff(path):
               try:
                   data = json.loads(path.read_text(encoding="utf-8", errors="ignore") or "[]")
               except Exception:
                   return
+
               for item in data:
                   loc = item.get("location", {})
-                  add("Ruff", "low", item.get("code", "RUFF"), item.get("message", ""), item.get("filename", ""), loc.get("row", ""))
+                  add_finding(
+                      "Ruff",
+                      "low",
+                      item.get("code", "RUFF"),
+                      item.get("message", ""),
+                      item.get("filename", ""),
+                      loc.get("row", ""),
+                  )
 
           def parse_gitleaks(path):
               try:
                   data = json.loads(path.read_text(encoding="utf-8", errors="ignore") or "[]")
               except Exception:
                   return
-              for item in data:
-                  add("Gitleaks", "high", item.get("RuleID", "SECRET"), item.get("Description", "Posible secreto expuesto"), item.get("File", ""), item.get("StartLine", ""))
 
-          def parse_pip(path):
+              for item in data:
+                  add_finding(
+                      "Gitleaks",
+                      "high",
+                      item.get("RuleID", "SECRET"),
+                      item.get("Description", "Posible secreto expuesto"),
+                      item.get("File", ""),
+                      item.get("StartLine", ""),
+                  )
+
+          def parse_pip_audit(path):
               try:
                   data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
               except Exception:
                   return
+
               dependencies = data.get("dependencies", []) if isinstance(data, dict) else data
+
               for pkg in dependencies:
                   if not isinstance(pkg, dict):
                       continue
-                  for vuln in pkg.get("vulns", []):
-                      add("pip-audit", vuln.get("severity", "unknown"), vuln.get("id", "PYTHON_VULN"), f"{pkg.get('name', '?')} {pkg.get('version', '')}: {vuln.get('description', vuln.get('fix_versions', ''))}")
 
-          def parse_codeql_meta(path):
+                  for vuln in pkg.get("vulns", []):
+                      add_finding(
+                          "pip-audit",
+                          vuln.get("severity", "unknown"),
+                          vuln.get("id", "PYTHON_VULN"),
+                          f"{pkg.get('name', '?')} {pkg.get('version', '')}: {vuln.get('description', vuln.get('fix_versions', ''))}",
+                          "",
+                          "",
+                      )
+
+          def parse_codeql_metadata(path):
               try:
                   data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
-                  add("CodeQL", "info", "CODEQL_METADATA", f"CodeQL ejecutado para lenguaje: {data.get('language', 'unknown')}. Resultados disponibles en GitHub Code Scanning si hubo hallazgos.", str(path), "")
+              except Exception:
+                  return
+
+              add_finding(
+                  "CodeQL",
+                  "info",
+                  "CODEQL_METADATA",
+                  f"CodeQL ejecutado o intentado para lenguaje: {data.get('language', 'unknown')}.",
+                  str(path),
+                  "",
+              )
+
+          for path in root.rglob("*.sarif"):
+              parse_sarif(path, path.stem)
+
+          for path in root.rglob("dependency_policy_findings.json"):
+              parse_json_findings(path)
+
+          for path in root.rglob("ai_policy_findings.json"):
+              parse_json_findings(path)
+
+          for path in root.rglob("ruff_lint.json"):
+              parse_ruff(path)
+
+          for path in root.rglob("ruff_format_diff.txt"):
+              try:
+                  if path.read_text(encoding="utf-8", errors="ignore").strip():
+                      add_finding(
+                          "Ruff Format",
+                          "low",
+                          "RUFF_FORMAT",
+                          "Existen diferencias de formato detectadas por Ruff.",
+                          str(path),
+                          "",
+                      )
               except Exception:
                   pass
 
-          for p in root.rglob("*.sarif"):
-              parse_sarif(p, p.stem)
-          for p in root.rglob("dependency_policy_findings.json"):
-              parse_json_findings(p)
-          for p in root.rglob("ai_policy_findings.json"):
-              parse_json_findings(p)
-          for p in root.rglob("ruff_lint.json"):
-              parse_ruff(p)
-          for p in root.rglob("ruff_format_diff.txt"):
-              if p.read_text(encoding="utf-8", errors="ignore").strip():
-                  add("Ruff Format", "low", "RUFF_FORMAT", "Existen diferencias de formato detectadas por Ruff.", str(p), "")
-          for p in root.rglob("gitleaks_report.json"):
-              parse_gitleaks(p)
-          for p in root.rglob("pip_audit_osv.json"):
-              parse_pip(p)
-          for p in root.rglob("codeql_*_metadata.json"):
-              parse_codeql_meta(p)
+          for path in root.rglob("gitleaks_report.json"):
+              parse_gitleaks(path)
 
-          counts = {s: len(grouped.get(s, [])) for s in severity_order}
+          for path in root.rglob("pip_audit_osv.json"):
+              parse_pip_audit(path)
+
+          for path in root.rglob("codeql_*_metadata.json"):
+              parse_codeql_metadata(path)
+
+          counts = {severity: len(grouped.get(severity, [])) for severity in severity_order}
           total = sum(counts.values())
-          names = {"critical":"Críticos","high":"Altos","medium":"Medios","low":"Bajos","info":"Informativos","unknown":"Desconocidos"}
 
-          lines = ["REPORTE CENTRALIZADO DE SEGURIDAD","="*80,"","Este reporte consolida los resultados de seguridad generados por el pipeline.","","RESUMEN EJECUTIVO","-"*80,
-                   f"Total de hallazgos : {total}",f"Críticos           : {counts['critical']}",f"Altos              : {counts['high']}",f"Medios             : {counts['medium']}",f"Bajos              : {counts['low']}",f"Informativos       : {counts['info']}",f"Desconocidos       : {counts['unknown']}",""]
-          for s in severity_order:
-              items = grouped.get(s, [])
-              lines.extend(["", f"HALLAZGOS {names[s].upper()} ({len(items)})", "-"*80])
+          names = {
+              "critical": "Críticos",
+              "high": "Altos",
+              "medium": "Medios",
+              "low": "Bajos",
+              "info": "Informativos",
+              "unknown": "Desconocidos",
+          }
+
+          lines = []
+          lines.append("REPORTE CENTRALIZADO DE SEGURIDAD")
+          lines.append("=" * 80)
+          lines.append("")
+          lines.append("Este reporte consolida los resultados de seguridad generados por el pipeline.")
+          lines.append("")
+          lines.append("RESUMEN EJECUTIVO")
+          lines.append("-" * 80)
+          lines.append(f"Total de hallazgos : {total}")
+          lines.append(f"Críticos           : {counts.get('critical', 0)}")
+          lines.append(f"Altos              : {counts.get('high', 0)}")
+          lines.append(f"Medios             : {counts.get('medium', 0)}")
+          lines.append(f"Bajos              : {counts.get('low', 0)}")
+          lines.append(f"Informativos       : {counts.get('info', 0)}")
+          lines.append(f"Desconocidos       : {counts.get('unknown', 0)}")
+          lines.append("")
+
+          for severity in severity_order:
+              items = grouped.get(severity, [])
+              lines.append("")
+              lines.append(f"HALLAZGOS {names[severity].upper()} ({len(items)})")
+              lines.append("-" * 80)
+
               if not items:
                   lines.append("Sin hallazgos.")
                   continue
-              for i, item in enumerate(items, 1):
-                  lines.extend([f"{i}. Herramienta : {item['tool']}",f"   Regla       : {item['rule']}",f"   Archivo     : {item['file']}",f"   Línea       : {item['line']}",f"   Descripción : {item['message']}",""])
 
-          (out / "security_report_es.txt").write_text("\n".join(lines), encoding="utf-8")
-          (out / "security_report_es.json").write_text(json.dumps({"summary":counts,"total":total,"findings":grouped}, indent=2, ensure_ascii=False), encoding="utf-8")
+              for index, item in enumerate(items, 1):
+                  lines.append(f"{index}. Herramienta : {item.get('tool', '')}")
+                  lines.append(f"   Regla       : {item.get('rule', '')}")
+                  lines.append(f"   Archivo     : {item.get('file', '')}")
+                  lines.append(f"   Línea       : {item.get('line', '')}")
+                  lines.append(f"   Descripción : {item.get('message', '')}")
+                  lines.append("")
 
-          html = ["<!doctype html><html><head><meta charset='utf-8'><title>Reporte centralizado de seguridad</title><style>body{font-family:Arial,sans-serif;margin:24px}table{border-collapse:collapse;width:100%;margin-bottom:32px}th,td{border:1px solid #ddd;padding:8px;vertical-align:top}th{background:#f4f4f4}</style></head><body><h1>Reporte centralizado de seguridad</h1><h2>Resumen ejecutivo</h2><ul>"]
-          for s in severity_order:
-              html.append(f"<li>{escape(names[s])}: {counts[s]}</li>")
+          report_txt.write_text("\n".join(lines), encoding="utf-8")
+
+          report_json.write_text(
+              json.dumps(
+                  {
+                      "summary": counts,
+                      "total": total,
+                      "findings": grouped,
+                  },
+                  indent=2,
+                  ensure_ascii=False,
+              ),
+              encoding="utf-8",
+          )
+
+          html = [
+              "<!doctype html>",
+              "<html>",
+              "<head>",
+              '<meta charset="utf-8">',
+              "<title>Reporte centralizado de seguridad</title>",
+              "<style>",
+              "body{font-family:Arial,sans-serif;margin:24px;}",
+              "table{border-collapse:collapse;width:100%;margin-bottom:32px;}",
+              "th,td{border:1px solid #ddd;padding:8px;vertical-align:top;}",
+              "th{background:#f4f4f4;}",
+              "</style>",
+              "</head>",
+              "<body>",
+              "<h1>Reporte centralizado de seguridad</h1>",
+              "<h2>Resumen ejecutivo</h2>",
+              "<ul>",
+          ]
+
+          for severity in severity_order:
+              html.append(f"<li>{escape(names[severity])}: {counts.get(severity, 0)}</li>")
+
           html.append("</ul>")
-          for s in severity_order:
-              html.append(f"<h2>Hallazgos {escape(names[s])} ({counts[s]})</h2><table><tr><th>Herramienta</th><th>Regla</th><th>Archivo</th><th>Línea</th><th>Descripción</th></tr>")
-              for item in grouped[s]:
-                  html.append(f"<tr><td>{escape(str(item['tool']))}</td><td>{escape(str(item['rule']))}</td><td>{escape(str(item['file']))}</td><td>{escape(str(item['line']))}</td><td>{escape(str(item['message']))}</td></tr>")
+
+          for severity in severity_order:
+              html.append(f"<h2>Hallazgos {escape(names[severity])} ({counts.get(severity, 0)})</h2>")
+              html.append("<table>")
+              html.append("<tr><th>Herramienta</th><th>Regla</th><th>Archivo</th><th>Línea</th><th>Descripción</th></tr>")
+
+              for item in grouped.get(severity, []):
+                  html.append(
+                      "<tr>"
+                      f"<td>{escape(str(item.get('tool', '')))}</td>"
+                      f"<td>{escape(str(item.get('rule', '')))}</td>"
+                      f"<td>{escape(str(item.get('file', '')))}</td>"
+                      f"<td>{escape(str(item.get('line', '')))}</td>"
+                      f"<td>{escape(str(item.get('message', '')))}</td>"
+                      "</tr>"
+                  )
+
               html.append("</table>")
+
           html.append("</body></html>")
-          (out / "security_report_es.html").write_text("\n".join(html), encoding="utf-8")
-          print("\n".join(lines))
+
+          report_html.write_text("\n".join(html), encoding="utf-8")
+
+          print(report_txt.read_text(encoding="utf-8"))
           PY
 
       - name: Add centralized report to job summary
         if: always()
         run: |
           python3 - <<'PY'
-          import os, pathlib
-          report = pathlib.Path("security_reports/security_report_es.txt")
+          import os
+          import pathlib
+
+          report_path = pathlib.Path("security_reports/security_report_es.txt")
+
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write("## Reporte centralizado de seguridad\n\n```text\n")
-              summary.write(report.read_text(encoding="utf-8", errors="ignore")[:120000] if report.exists() else "No se encontró el reporte local generado por el pipeline.")
+              summary.write("## Reporte centralizado de seguridad\n\n")
+              summary.write("```text\n")
+
+              if report_path.exists():
+                  summary.write(report_path.read_text(encoding="utf-8", errors="ignore")[:120000])
+              else:
+                  summary.write("No se encontró el reporte local generado por el pipeline.")
+
               summary.write("\n```\n")
           PY
 
@@ -1277,18 +1665,50 @@ jobs:
       - name: Final verdict
         run: |
           python3 - <<'PY'
-          import json, os, sys
-          data = json.load(open("security_reports/security_report_es.json", encoding="utf-8"))
+          import json
+          import os
+          import sys
+
+          report_path = "security_reports/security_report_es.json"
+
+          if not os.path.exists(report_path):
+              print("Report was not created. Creating neutral verdict.")
+              sys.exit(0)
+
+          data = json.load(open(report_path, encoding="utf-8"))
           summary = data.get("summary", {})
-          threshold = "${{ github.event.inputs.fail_on }}" or os.environ.get("DEFAULT_FAIL_ON", "never")
+
+          threshold = "${{ github.event.inputs.fail_on }}"
+
+          if not threshold:
+              threshold = os.environ.get("DEFAULT_FAIL_ON", "never")
+
           threshold = threshold.lower()
-          order = {"critical":5,"high":4,"medium":3,"low":2,"info":1,"unknown":0,"never":99}
+
+          order = {
+              "critical": 5,
+              "high": 4,
+              "medium": 3,
+              "low": 2,
+              "info": 1,
+              "unknown": 0,
+              "never": 99,
+          }
+
           if threshold == "never":
               print("Final verdict configured as never fail.")
               sys.exit(0)
-          blocking = sum(int(count) for severity, count in summary.items() if order.get(severity, 0) >= order.get(threshold, 99))
+
+          min_value = order.get(threshold, 99)
+          blocking = 0
+
+          for severity, count in summary.items():
+              if order.get(severity, 0) >= min_value:
+                  blocking += int(count)
+
           if blocking > 0:
               print(f"Security Report failed: {blocking} finding(s) at or above threshold '{threshold}'.")
               sys.exit(1)
+
           print("Security Report passed.")
           PY
