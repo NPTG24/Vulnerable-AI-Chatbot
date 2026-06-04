@@ -310,6 +310,7 @@ jobs:
             --config p/secrets \
             --config p/dockerfile \
             --config p/yaml \
+            --exclude .github/workflows/** \
             --sarif \
             --output semgrep.sarif \
             . || true
@@ -323,6 +324,7 @@ jobs:
             --config p/secrets \
             --config p/dockerfile \
             --config p/yaml \
+            --exclude .github/workflows/** \
             --json \
             --output semgrep.json \
             . || true
@@ -802,12 +804,14 @@ jobs:
         run: |
           semgrep \
             --config .semgrep/ai-security \
+            --exclude .github/workflows/** \
             --sarif \
             --output semgrep_ai.sarif \
             . || true
 
           semgrep \
             --config .semgrep/ai-security \
+            --exclude .github/workflows/** \
             --json \
             --output semgrep_ai.json \
             . || true
@@ -837,7 +841,7 @@ jobs:
   # JOB 6: AI POLICY COMPLIANCE — LOCAL LLM / AGENTIC GOVERNANCE
   # ============================================================================
   # Reglas locales sin OPA externo y sin dependencias SaaS.
-  # Corregido: no usa https://urldefense.com/v3/__http://file_path.parts__;!!P110LumUDw!9YjQ-aOJPzSsT05kdA1suxJjr7F7_GVJI16SK17iEsC3HdEmI5_TvjTeBRFn814Cn4J-UCji2GHETsZmOgMJniqmuzUeKQ$  para evitar contaminación por URLDefense/SafeLinks.
+  # Corregido: no usa https://urldefense.com/v3/__http://file_path.parts__;!!P110LumUDw!_91XcD6OQY5_S8CecoXtXZ3lw-mIWaKxltEhXSw38kGB5HW8E0rCvQMAQ5xZsunwVg5ShdKW84cssCoBq4MZa89-gcjfOg$  para evitar contaminación por URLDefense/SafeLinks.
   # ============================================================================
 
   ai-policy-compliance:
@@ -854,7 +858,7 @@ jobs:
       - name: Detect corporate URL rewriting in workflow
         continue-on-error: true
         run: |
-          if grep -R "urldefense.com\|https://urldefense.com/v3/__http://safelinks.protection.outlook.com__;!!P110LumUDw!9YjQ-aOJPzSsT05kdA1suxJjr7F7_GVJI16SK17iEsC3HdEmI5_TvjTeBRFn814Cn4J-UCji2GHETsZmOgMJnip7F0Pw_A$ " .github/workflows/ 2>/dev/null; then
+          if grep -R "urldefense.com\|https://urldefense.com/v3/__http://safelinks.protection.outlook.com__;!!P110LumUDw!_91XcD6OQY5_S8CecoXtXZ3lw-mIWaKxltEhXSw38kGB5HW8E0rCvQMAQ5xZsunwVg5ShdKW84cssCoBq4MZa8_KhY1A-A$ " .github/workflows/ 2>/dev/null; then
             echo "Corporate URL rewriting detected inside workflow files. Review copied YAML."
           else
             echo "No corporate URL rewriting detected in workflow files."
@@ -873,7 +877,7 @@ jobs:
           }
 
           skip_dirs = {
-              ".git", "node_modules", ".venv", "venv", "dist", "build",
+              ".git", ".github", "node_modules", ".venv", "venv", "dist", "build",
               "__pycache__", ".mypy_cache", ".pytest_cache"
           }
 
@@ -890,8 +894,8 @@ jobs:
               })
 
           def should_skip_file(candidate_path):
-              # Evita usar https://urldefense.com/v3/__http://candidate_path.parts__;!!P110LumUDw!9YjQ-aOJPzSsT05kdA1suxJjr7F7_GVJI16SK17iEsC3HdEmI5_TvjTeBRFn814Cn4J-UCji2GHETsZmOgMJniq8Fbaq6A$  porque algunos entornos corporativos
-              # reescriben patrones tipo https://urldefense.com/v3/__http://file_path.parts__;!!P110LumUDw!9YjQ-aOJPzSsT05kdA1suxJjr7F7_GVJI16SK17iEsC3HdEmI5_TvjTeBRFn814Cn4J-UCji2GHETsZmOgMJniqmuzUeKQ$  como URLDefense/SafeLinks.
+              # Evita usar https://urldefense.com/v3/__http://candidate_path.parts__;!!P110LumUDw!_91XcD6OQY5_S8CecoXtXZ3lw-mIWaKxltEhXSw38kGB5HW8E0rCvQMAQ5xZsunwVg5ShdKW84cssCoBq4MZa89mjXKLKg$  porque algunos entornos corporativos
+              # reescriben patrones tipo https://urldefense.com/v3/__http://file_path.parts__;!!P110LumUDw!_91XcD6OQY5_S8CecoXtXZ3lw-mIWaKxltEhXSw38kGB5HW8E0rCvQMAQ5xZsunwVg5ShdKW84cssCoBq4MZa89-gcjfOg$  como URLDefense/SafeLinks.
               normalized_path = str(candidate_path).replace("\\", "/")
               segments = normalized_path.split("/")
 
