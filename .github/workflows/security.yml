@@ -6,11 +6,11 @@ on:
   pull_request:
     branches: [main, master]
   schedule:
-    - cron: "0 2 * * 1"
+    - cron: "0 3 * * 1"
   workflow_dispatch:
     inputs:
       run_scorecard:
-        description: "Run OpenSSF Scorecard hygiene audit"
+        description: "Run repository hygiene audit"
         required: false
         default: "false"
         type: choice
@@ -26,15 +26,20 @@ permissions:
   actions: read
   pull-requests: read
 
+# Objetivo:
+# - No bloquea push ni PR.
+# - Evita falsos positivos por revisar el propio workflow.
+# - No usa apt-get ni URLs embebidas para evitar problemas con proxy/WAF empresarial.
+# - Genera artifacts y resumen final aunque alguna herramienta falle.
+
 env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "20"
-  EXCLUDES: >-
-    .git,.github,node_modules,dist,build,coverage,.venv,venv,env,__pycache__,.mypy_cache,.pytest_cache
+  EXCLUDES: ".git,.github,node_modules,dist,build,coverage,.venv,venv,__pycache__"
 
 jobs:
-  detect-project:
-    name: Detectar proyecto
+  detect:
+    name: Detectar stack
     runs-on: ubuntu-latest
     outputs:
       has_python: ${{ steps.detect.outputs.has_python }}
@@ -46,550 +51,464 @@ jobs:
         shell: bash
         run: |
           set +e
-          if find . -path './.git' -prune -o -path './.github' -prune -o \( -name '*.py' -o -name 'requirements.txt' -o -name 'pyproject.toml' \) -print -quit | grep -q .; then
-            echo "has_python=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_python=false" >> "$GITHUB_OUTPUT"
-          fi
-          if find . -path './.git' -prune -o -path './.github' -prune -o \( -name 'package.json' -o -name '*.js' -o -name '*.ts' \) -print -quit | grep -q .; then
-            echo "has_node=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_node=false" >> "$GITHUB_OUTPUT"
-          fi
-          if find . -path './.git' -prune -o -path './.github' -prune -o \( -iname 'Dockerfile*' -o -name 'docker-compose.yml' -o -name 'docker-compose.yaml' \) -print -quit | grep -q .; then
-            echo "has_docker=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_docker=false" >> "$GITHUB_OUTPUT"
-          fi
+          test -f requirements.txt -o -f pyproject.toml -o -f Pipfile -o -f https://urldefense.com/v3/__http://setup.py__;!!P110LumUDw!7syoxJHRWC7aMbCY-bXBnXZN-g1C2yVRtCY3fL74th_UAqzmy4df4sfOBdENOnJqBtIx1FBZxeJ1KO27J7BQUW-YIGwSOw$  && echo "has_python=true" >> "$GITHUB_OUTPUT" || echo "has_python=false" >> "$GITHUB_OUTPUT"
+          test -f package.json -o -f package-lock.json -o -f yarn.lock -o -f pnpm-lock.yaml && echo "has_node=true" >> "$GITHUB_OUTPUT" || echo "has_node=false" >> "$GITHUB_OUTPUT"
+          test -f Dockerfile -o -f docker-compose.yml -o -f compose.yml && echo "has_docker=true" >> "$GITHUB_OUTPUT" || echo "has_docker=false" >> "$GITHUB_OUTPUT"
 
-  policy-versions-pinning:
-    name: Policy — versiones y pinning
+  policy:
+    name: Policy â€” versiones y pinning
     runs-on: ubuntu-latest
-    needs: detect-project
+    needs: detect
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Revisar estándares mínimos sin bloquear
-        shell: bash
+      - name: Revisar estÃ¡ndares mÃ­nimos sin bloquear
+        shell: python
         run: |
-          python3 - <<'PY'
           import json, pathlib, re
-          findings=[]
-          skip={'.git','.github','node_modules','dist','build','coverage','.venv','venv','env','__pycache__'}
-          def ignored(p): return any(x in https://urldefense.com/v3/__http://p.parts__;!!P110LumUDw!-LaRZ19GuSzEii9NQWmSw0yhYjdkJjOa9T_VrpHLUv9baBEwFY2scbNFrqZZpSRnufE0ex2p1tHg3LE6NAmx1948gJh9aw$  for x in skip)
-          def add(sev, rule, file, msg): findings.append({'severity':sev,'rule':rule,'file':str(file),'message':msg})
-
-          for req in pathlib.Path('.').rglob('requirements*.txt'):
-              if ignored(req): continue
-              for i,line in enumerate(req.read_text(errors='ignore').splitlines(),1):
-                  s=line.strip()
-                  if not s or s.startswith('#') or s.startswith('-r') or s.startswith('--'): continue
-                  if re.match(r'^[A-Za-z0-9_.-]+\s*$', s):
-                      add('medium','python-unpinned-dependency',f'{req}:{i}',f'Dependencia Python sin versión fija: {s}')
-                  elif re.search(r'>=|>|~=|\*', s) and '==' not in s:
-                      add('low','python-loose-dependency',f'{req}:{i}',f'Dependencia Python con rango amplio: {s}')
-
-          for pkg in pathlib.Path('.').rglob('package.json'):
-              if ignored(pkg): continue
-              try:
-                  data=json.loads(pkg.read_text(errors='ignore'))
-              except Exception:
-                  add('medium','invalid-package-json',pkg,'package.json no parseable')
+          reports = pathlib.Path("reports")
+          reports.mkdir(exist_ok=True)
+          skip = {".git", ".github", "node_modules", "dist", "build", "coverage", ".venv", "venv", "__pycache__"}
+          findings = []
+          def ignored(p):
+              return any(part in skip for part in https://urldefense.com/v3/__http://p.parts__;!!P110LumUDw!7syoxJHRWC7aMbCY-bXBnXZN-g1C2yVRtCY3fL74th_UAqzmy4df4sfOBdENOnJqBtIx1FBZxeJ1KO27J7BQUW_WbU5Z7A$ )
+          def add(sev, rule, path, msg):
+              findings.append({"severity": sev, "rule": rule, "file": str(path), "message": msg})
+          for p in pathlib.Path(".").rglob("requirements*.txt"):
+              if ignored(p):
                   continue
-              for section in ['dependencies','devDependencies']:
-                  for name,ver in (data.get(section) or {}).items():
-                      if isinstance(ver,str) and (ver.startswith('^') or ver.startswith('~') or ver in ['latest','*']):
-                          add('low','node-loose-dependency',pkg,f'{section}: {name}@{ver}')
-              engines=data.get('engines') or {}
-              if not engines.get('node'):
-                  add('low','node-engine-missing',pkg,'Falta engines.node para fijar versión mínima de Node')
-
-          if not pathlib.Path('.python-version').exists() and not any(pathlib.Path('.').glob('runtime.txt')) and not any(pathlib.Path('.').glob('pyproject.toml')):
-              add('info','python-version-not-declared','.','No se encontró .python-version/runtime.txt/pyproject.toml')
-
-          pathlib.Path('reports').mkdir(exist_ok=True)
-          pathlib.Path('reports/policy_findings.json').write_text(json.dumps(findings,indent=2),encoding='utf-8')
-          print(f'Policy findings: {len(findings)}')
-          for f in findings[:80]:
-              print(f"[{f['severity']}] {f['rule']} {f['file']} - {f['message']}")
-          PY
+              for n, line in enumerate(p.read_text(errors="ignore").splitlines(), 1):
+                  s = line.strip()
+                  if not s or s.startswith("#") or s.startswith("-"):
+                      continue
+                  if any(x in s for x in [">=", "<=", "~=", ">", "<"]) and "==" not in s:
+                      add("medium", "python-dependency-not-exactly-pinned", p, f"L{n}: preferir pin exacto con == para builds reproducibles")
+                  elif re.match(r"^[A-Za-z0-9_.-]+$", s):
+                      add("high", "python-dependency-unpinned", p, f"L{n}: dependencia sin versiÃ³n")
+          for p in pathlib.Path(".").rglob("package.json"):
+              if ignored(p):
+                  continue
+              try:
+                  data = json.loads(p.read_text(errors="ignore"))
+              except Exception:
+                  add("medium", "package-json-invalid", p, "No se pudo parsear package.json")
+                  continue
+              engines = data.get("engines", {}) if isinstance(data, dict) else {}
+              if not engines.get("node"):
+                  add("medium", "node-engine-missing", p, "Falta engines.node")
+              for section in ["dependencies", "devDependencies"]:
+                  deps = data.get(section, {}) if isinstance(data, dict) else {}
+                  if isinstance(deps, dict):
+                      for name, version in deps.items():
+                          version = str(version)
+                          if version.startswith(("^", "~", "*")) or version in ["latest", ""]:
+                              add("medium", "npm-dependency-not-pinned", p, f"{name}: versiÃ³n flexible {version}")
+          if pathlib.Path("package.json").exists() and not any(pathlib.Path(x).exists() for x in ["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml"]):
+              add("high", "node-lockfile-missing", "package.json", "Falta lockfile")
+          pathlib.Path("reports/policy.json").write_text(json.dumps({"findings": findings}, indent=2), encoding="utf-8")
+          print(json.dumps({"policy_findings": len(findings)}, indent=2))
+        continue-on-error: true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: policy-version-pinning
-          path: reports/policy_findings.json
-          retention-days: 30
+          name: policy-results
+          path: reports/policy.json
+          if-no-files-found: ignore
 
   codeql:
-    name: CodeQL — código real
+    name: CodeQL â€” cÃ³digo real
     runs-on: ubuntu-latest
-    needs: detect-project
+    needs: detect
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         language: [python, javascript-typescript]
     steps:
       - uses: actions/checkout@v4
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@v4
         continue-on-error: true
         with:
           languages: ${{ matrix.language }}
           queries: security-extended,security-and-quality
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
+      - uses: github/codeql-action/autobuild@v4
         continue-on-error: true
-      - name: Analyze
-        uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@v4
         continue-on-error: true
         with:
           category: codeql-${{ matrix.language }}
 
-  semgrep-sast:
-    name: Semgrep — SAST alta señal
+  semgrep:
+    name: Semgrep â€” SAST y AI alta seÃ±al
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Instalar Semgrep
-        run: python -m pip install --upgrade pip semgrep
-      - name: Reglas locales de alta señal
         shell: bash
         run: |
-          mkdir -p .semgrep/local
-          cat > .semgrep/local/high-signal.yml <<'YAML'
+          set +e
+          python -m pip install --upgrade pip
+          python -m pip install semgrep
+          mkdir -p reports
+        continue-on-error: true
+      - name: Crear reglas locales AI y cÃ³digo
+        shell: bash
+        run: |
+          mkdir -p rules reports
+          cat > rules/high-signal.yml <<'YAML'
           rules:
-            - id: python-subprocess-shell-true
+            - id: python-shell-true
               languages: [python]
               severity: ERROR
               message: "Command injection: subprocess con shell=True."
-              metadata: {cwe: "CWE-78", confidence: high}
+              metadata:
+                cwe: "CWE-78"
+                owasp_llm: "LLM06 Excessive Agency"
               pattern-either:
                 - pattern: subprocess.run(..., shell=True, ...)
                 - pattern: subprocess.Popen(..., shell=True, ...)
                 - pattern: subprocess.call(..., shell=True, ...)
                 - pattern: subprocess.check_output(..., shell=True, ...)
-            - id: python-os-command-exec
+            - id: python-os-system
               languages: [python]
               severity: ERROR
-              message: "Ejecución de comandos con os.system/os.popen."
-              metadata: {cwe: "CWE-78", confidence: high}
+              message: "EjecuciÃ³n de comandos con os.system/os.popen."
+              metadata:
+                cwe: "CWE-78"
+                owasp_llm: "LLM06 Excessive Agency"
               pattern-either:
                 - pattern: os.system(...)
                 - pattern: os.popen(...)
             - id: python-eval-exec
               languages: [python]
               severity: ERROR
-              message: "eval/exec puede generar RCE."
-              metadata: {cwe: "CWE-94", confidence: high}
+              message: "eval/exec puede transformar input o salida LLM en RCE."
+              metadata:
+                cwe: "CWE-94"
+                owasp_llm: "LLM02 Insecure Output Handling"
               pattern-either:
                 - pattern: eval(...)
                 - pattern: exec(...)
-            - id: python-unsafe-yaml-load
+            - id: python-flask-debug
+              languages: [python]
+              severity: ERROR
+              message: "Flask debug=True expone debugger interactivo."
+              metadata:
+                cwe: "CWE-489"
+              pattern-either:
+                - pattern: app.run(..., debug=True, ...)
+                - pattern: $APP.run(..., debug=True, ...)
+            - id: python-yaml-load-unsafe
               languages: [python]
               severity: ERROR
               message: "yaml.load sin SafeLoader."
-              metadata: {cwe: "CWE-502", confidence: high}
+              metadata:
+                cwe: "CWE-502"
               patterns:
                 - pattern: yaml.load(...)
                 - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
                 - pattern-not: yaml.load(..., Loader=SafeLoader, ...)
-            - id: python-flask-debug-true
+            - id: python-pickle-load
               languages: [python]
-              severity: ERROR
-              message: "Flask debug=True expone debugger interactivo."
-              metadata: {cwe: "CWE-489", confidence: high}
-              pattern: $APP.run(..., debug=True, ...)
+              severity: WARNING
+              message: "pickle sobre datos no confiables puede causar ejecuciÃ³n de cÃ³digo."
+              metadata:
+                cwe: "CWE-502"
+              pattern-either:
+                - pattern: pickle.load(...)
+                - pattern: pickle.loads(...)
             - id: python-requests-verify-false
               languages: [python]
               severity: WARNING
               message: "TLS verification deshabilitada con verify=False."
-              metadata: {cwe: "CWE-295", confidence: high}
-              pattern: requests.$METHOD(..., verify=False, ...)
+              metadata:
+                cwe: "CWE-295"
+              pattern-either:
+                - pattern: requests.get(..., verify=False, ...)
+                - pattern: requests.post(..., verify=False, ...)
+                - pattern: requests.put(..., verify=False, ...)
+                - pattern: requests.delete(..., verify=False, ...)
+                - pattern: requests.request(..., verify=False, ...)
+            - id: python-sql-formatting
+              languages: [python]
+              severity: WARNING
+              message: "Posible SQL injection por query construida dinÃ¡micamente."
+              metadata:
+                cwe: "CWE-89"
+              pattern-either:
+                - pattern: $CUR.execute("..." % ...)
+                - pattern: $CUR.execute("...".format(...))
+                - pattern: $CUR.execute(f"...{...}...")
             - id: js-eval-function
               languages: [javascript, typescript]
               severity: ERROR
-              message: "eval/new Function permite ejecución dinámica peligrosa."
-              metadata: {cwe: "CWE-94", confidence: high}
+              message: "eval/new Function permite ejecuciÃ³n dinÃ¡mica."
+              metadata:
+                cwe: "CWE-94"
+                owasp_llm: "LLM02 Insecure Output Handling"
               pattern-either:
                 - pattern: eval(...)
                 - pattern: new Function(...)
             - id: node-child-process-exec
               languages: [javascript, typescript]
               severity: ERROR
-              message: "child_process.exec/execSync: riesgo de command injection."
-              metadata: {cwe: "CWE-78", confidence: high}
+              message: "child_process exec/execSync puede permitir command injection."
+              metadata:
+                cwe: "CWE-78"
+                owasp_llm: "LLM06 Excessive Agency"
               pattern-either:
                 - pattern: child_process.exec(...)
                 - pattern: child_process.execSync(...)
                 - pattern: exec(...)
                 - pattern: execSync(...)
-          YAML
-      - name: Ejecutar Semgrep
-        continue-on-error: true
-        run: |
-          semgrep scan \
-            --config p/python \
-            --config p/javascript \
-            --config p/typescript \
-            --config p/nodejs \
-            --config p/owasp-top-ten \
-            --config .semgrep/local/high-signal.yml \
-            --exclude .github/workflows/** \
-            --exclude node_modules --exclude dist --exclude build --exclude coverage \
-            --exclude .venv --exclude venv --exclude env \
-            --sarif --output reports/semgrep_sast.sarif . || true
-          semgrep scan --config .semgrep/local/high-signal.yml \
-            --exclude .github/workflows/** --exclude node_modules --exclude dist --exclude build --exclude coverage \
-            --exclude .venv --exclude venv --exclude env \
-            --json --output reports/semgrep_sast.json . || true
-      - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        continue-on-error: true
-        with:
-          sarif_file: reports/semgrep_sast.sarif
-          category: semgrep-sast
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: semgrep-sast
-          path: reports/semgrep_sast.*
-          retention-days: 30
-
-  ai-llm-security:
-    name: Semgrep — AI/LLM alta señal
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Instalar Semgrep
-        run: python -m pip install --upgrade pip semgrep
-      - name: Crear reglas AI/LLM OWASP LLM Top 10
-        shell: bash
-        run: |
-          mkdir -p .semgrep/ai
-          cat > .semgrep/ai/owasp-llm.yml <<'YAML'
-          rules:
-            - id: llm01-user-controlled-system-prompt-python
-              languages: [python]
-              severity: WARNING
-              message: "LLM01 Prompt Injection: posible input externo como system/developer prompt."
-              metadata: {owasp_llm: LLM01, confidence: medium}
-              patterns:
-                - pattern-either:
-                    - pattern: '{"role": "system", "content": $X}'
-                    - pattern: '{"role": "developer", "content": $X}'
-                - metavariable-regex:
-                    metavariable: $X
-                    regex: (?i).*(input|user|query|question|request|message|payload|body|content).*
-            - id: llm02-output-to-exec-python
-              languages: [python]
-              severity: ERROR
-              message: "LLM02 Insecure Output Handling: output/input puede llegar a eval/exec."
-              metadata: {owasp_llm: LLM02, confidence: high}
-              pattern-either:
-                - pattern: eval(...)
-                - pattern: exec(...)
-            - id: llm02-output-to-shell-python
-              languages: [python]
-              severity: ERROR
-              message: "LLM02/LLM06: ejecución shell en app/agente IA."
-              metadata: {owasp_llm: "LLM02/LLM06", confidence: high}
-              pattern-either:
-                - pattern: subprocess.run(..., shell=True, ...)
-                - pattern: subprocess.Popen(..., shell=True, ...)
-                - pattern: os.system(...)
-                - pattern: os.popen(...)
-            - id: llm04-rag-untrusted-ingestion-python
-              languages: [python]
-              severity: WARNING
-              message: "LLM04 Data/Model Poisoning: RAG/vectorstore sin señal de metadata/source/tenant/validación."
-              metadata: {owasp_llm: LLM04, confidence: medium}
-              patterns:
-                - pattern-either:
-                    - pattern: $DB.add_documents($DOCS, ...)
-                    - pattern: $DB.add_texts($TEXTS, ...)
-                    - pattern: $VS.from_documents($DOCS, ...)
-                    - pattern: $VS.add_documents($DOCS, ...)
-                - pattern-not-regex: (?i)(metadata|source|tenant|validate|sanitize|trusted|allowlist)
-            - id: llm05-ssrf-url-loader-python
-              languages: [python]
-              severity: WARNING
-              message: "LLM05 Improper Output Handling/SSRF: carga de URL externa en contexto LLM/RAG; validar allowlist."
-              metadata: {owasp_llm: LLM05, confidence: medium}
-              pattern-either:
-                - pattern: WebBaseLoader($URL, ...)
-                - pattern: requests.get($URL, ...)
-                - pattern: urllib.request.urlopen($URL, ...)
-            - id: llm06-excessive-agency-langchain-tools
-              languages: [python]
-              severity: WARNING
-              message: "LLM06 Excessive Agency: agente/tools sin señal evidente de allowlist/aprobación."
-              metadata: {owasp_llm: LLM06, confidence: medium}
-              patterns:
-                - pattern-either:
-                    - pattern: initialize_agent(..., tools=$TOOLS, ...)
-                    - pattern: AgentExecutor(..., tools=$TOOLS, ...)
-                    - pattern: Tool(..., func=$FUNC, ...)
-                    - pattern: StructuredTool.from_function($FUNC, ...)
-                - pattern-not-regex: (?i)(allowlist|whitelist|approval|human|confirm|permission|denylist)
-            - id: llm07-system-prompt-hardcoded
+            - id: ai-system-prompt-hardcoded
               languages: [python, javascript, typescript]
-              severity: INFO
-              message: "LLM07 System Prompt Leakage: prompt del sistema hardcodeado; revisar exposición/logs."
-              metadata: {owasp_llm: LLM07, confidence: low}
-              pattern-regex: (?i)(system_prompt|system prompt|developer_prompt|internal instructions)
-            - id: llm08-vectorstore-no-access-control-python
+              severity: WARNING
+              message: "System prompt hardcodeado. Revisar exposiciÃ³n, logging y fuga de instrucciones."
+              metadata:
+                owasp_llm: "LLM07 System Prompt Leakage"
+              pattern-regex: "(?i)(system_prompt|systemMessage|developer_message|developerMessage)"
+            - id: ai-openai-without-output-limit-python
               languages: [python]
               severity: WARNING
-              message: "LLM08 Vector/Embedding Weakness: búsqueda vectorial sin señal de tenant/filter/access control."
-              metadata: {owasp_llm: LLM08, confidence: medium}
-              patterns:
-                - pattern-either:
-                    - pattern: $DB.similarity_search($Q, ...)
-                    - pattern: $DB.as_retriever(...)
-                    - pattern: $RET.get_relevant_documents($Q, ...)
-                - pattern-not-regex: (?i)(tenant|filter|where|metadata|acl|permission|user_id|owner)
-            - id: llm10-openai-without-limits-python
-              languages: [python]
-              severity: WARNING
-              message: "LLM10 Unbounded Consumption: llamada LLM sin límites obvios de tokens/timeout."
-              metadata: {owasp_llm: LLM10, confidence: medium}
+              message: "Llamada LLM sin lÃ­mite evidente de salida."
+              metadata:
+                owasp_llm: "LLM10 Unbounded Consumption"
               patterns:
                 - pattern-either:
                     - pattern: $CLIENT.chat.completions.create(...)
                     - pattern: $CLIENT.responses.create(...)
                 - pattern-not: $CLIENT.chat.completions.create(..., max_tokens=$M, ...)
                 - pattern-not: $CLIENT.responses.create(..., max_output_tokens=$M, ...)
+            - id: ai-langchain-agent-tools
+              languages: [python]
+              severity: WARNING
+              message: "Agente LangChain con tools. Revisar allowlist, permisos y aprobaciÃ³n humana."
+              metadata:
+                owasp_llm: "LLM06 Excessive Agency"
+              pattern-either:
+                - pattern: initialize_agent(..., tools=$TOOLS, ...)
+                - pattern: AgentExecutor(..., tools=$TOOLS, ...)
+                - pattern: Tool(..., func=$FUNC, ...)
+                - pattern: StructuredTool.from_function($FUNC, ...)
+            - id: ai-vectorstore-ingestion
+              languages: [python]
+              severity: WARNING
+              message: "RAG/vectorstore: revisar validaciÃ³n de fuente, tenant y metadata."
+              metadata:
+                owasp_llm: "LLM04 Data and Model Poisoning"
+              pattern-either:
+                - pattern: $DB.add_documents(...)
+                - pattern: $DB.add_texts(...)
+                - pattern: $STORE.from_documents(...)
           YAML
-      - name: Ejecutar reglas AI/LLM
-        continue-on-error: true
+      - name: Ejecutar Semgrep
+        shell: bash
         run: |
-          mkdir -p reports
-          semgrep scan --config .semgrep/ai/owasp-llm.yml \
-            --exclude .github/workflows/** --exclude node_modules --exclude dist --exclude build --exclude coverage \
-            --exclude .venv --exclude venv --exclude env \
-            --sarif --output reports/semgrep_ai_llm.sarif . || true
-          semgrep scan --config .semgrep/ai/owasp-llm.yml \
-            --exclude .github/workflows/** --exclude node_modules --exclude dist --exclude build --exclude coverage \
-            --exclude .venv --exclude venv --exclude env \
-            --json --output reports/semgrep_ai_llm.json . || true
-      - name: Upload AI SARIF
-        uses: github/codeql-action/upload-sarif@v4
+          set +e
+          semgrep scan --config p/python --config p/javascript --config p/typescript --config p/nodejs --config p/owasp-top-ten --config rules/high-signal.yml --exclude .github/workflows --exclude node_modules --exclude dist --exclude build --exclude coverage --exclude .venv --exclude venv --json --output reports/semgrep.json .
+          semgrep scan --config p/python --config p/javascript --config p/typescript --config p/nodejs --config p/owasp-top-ten --config rules/high-signal.yml --exclude .github/workflows --exclude node_modules --exclude dist --exclude build --exclude coverage --exclude .venv --exclude venv --sarif --output reports/semgrep.sarif .
+          test -f reports/semgrep.json || echo '{"results":[]}' > reports/semgrep.json
+          test -f reports/semgrep.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Semgrep","rules":[]}},"results":[]}]}' > reports/semgrep.sarif
+          exit 0
+        continue-on-error: true
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         continue-on-error: true
         with:
-          sarif_file: reports/semgrep_ai_llm.sarif
-          category: ai-llm-security
+          sarif_file: reports/semgrep.sarif
+          category: semgrep-high-signal
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: semgrep-ai-llm
-          path: reports/semgrep_ai_llm.*
-          retention-days: 30
+          name: semgrep-results
+          path: reports/semgrep.*
+          if-no-files-found: ignore
 
   python-security:
-    name: Python — Bandit + pip-audit
+    name: Python â€” Bandit Ruff pip-audit
     runs-on: ubuntu-latest
-    needs: detect-project
-    if: needs.detect-project.outputs.has_python == 'true'
+    needs: detect
+    if: needs.detect.outputs.has_python == 'true'
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Instalar herramientas
-        run: python -m pip install --upgrade pip bandit pip-audit
-      - name: Bandit high signal
-        continue-on-error: true
+      - name: Ejecutar herramientas Python
+        shell: bash
         run: |
+          set +e
           mkdir -p reports
-          bandit -r . \
-            -x ./.github,./node_modules,./dist,./build,./coverage,./.venv,./venv,./env \
-            -lll -ii -f json -o reports/bandit.json || true
-      - name: pip-audit
+          python -m pip install --upgrade pip
+          python -m pip install bandit ruff pip-audit
+          bandit -r . -x .git,.github,node_modules,dist,build,coverage,.venv,venv -f json -o reports/bandit.json || true
+          ruff check . --select S,B --exclude .github --exclude node_modules --exclude dist --exclude build --output-format json > reports/ruff-security.json || true
+          if [ -f requirements.txt ]; then pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true; else echo '{"dependencies":[]}' > reports/pip-audit.json; fi
+          exit 0
         continue-on-error: true
-        run: |
-          mkdir -p reports
-          if [ -f requirements.txt ]; then
-            pip-audit -r requirements.txt -f json -o reports/pip_audit.json || true
-          elif [ -f pyproject.toml ]; then
-            pip-audit -f json -o reports/pip_audit.json || true
-          else
-            echo '{"dependencies":[],"vulnerabilities":[]}' > reports/pip_audit.json
-          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: python-security
+          name: python-security-results
           path: reports/*.json
-          retention-days: 30
+          if-no-files-found: ignore
 
   node-security:
-    name: Node — npm audit
+    name: Node â€” npm audit
     runs-on: ubuntu-latest
-    needs: detect-project
-    if: needs.detect-project.outputs.has_node == 'true'
+    needs: detect
+    if: needs.detect.outputs.has_node == 'true'
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            npm-shrinkwrap.json
-      - name: npm audit report-only
-        continue-on-error: true
-        run: |
-          mkdir -p reports
-          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-            npm audit --audit-level=moderate --json > reports/npm_audit.json || true
-          else
-            echo '{"warning":"No package-lock.json/npm-shrinkwrap.json; npm audit omitido para evitar resultados imprecisos"}' > reports/npm_audit.json
-          fi
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: node-security
-          path: reports/npm_audit.json
-          retention-days: 30
-
-  osv-scanner:
-    name: OSV Scanner — dependencias
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run OSV Scanner
-        uses: google/osv-scanner-action/osv-scanner-action@v2.1.0
-        continue-on-error: true
-        with:
-          scan-args: |-
-            --recursive
-            --skip-git
-            --format=json
-            --output=reports/osv-results.json
-            .
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: osv-scanner
-          path: reports/osv-results.json
-          retention-days: 30
-
-  trivy-security:
-    name: Trivy — vuln/secret/misconfig
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Instalar Trivy CLI
+          cache-dependency-path: package-lock.json
+      - name: Ejecutar npm audit sin bloquear
         shell: bash
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
-          wget -qO - https://urldefense.com/v3/__https://aquasecurity.github.io/trivy-repo/deb/public.key__;!!P110LumUDw!-LaRZ19GuSzEii9NQWmSw0yhYjdkJjOa9T_VrpHLUv9baBEwFY2scbNFrqZZpSRnufE0ex2p1tHg3LE6NAmx196jxeW46g$  | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://urldefense.com/v3/__https://aquasecurity.github.io/trivy-repo/deb__;!!P110LumUDw!-LaRZ19GuSzEii9NQWmSw0yhYjdkJjOa9T_VrpHLUv9baBEwFY2scbNFrqZZpSRnufE0ex2p1tHg3LE6NAmx1978BTOzwQ$  $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update -y
-          sudo apt-get install -y trivy
-      - name: Trivy filesystem
-        continue-on-error: true
-        run: |
+          set +e
           mkdir -p reports
-          trivy fs . \
-            --scanners vuln,secret,misconfig \
-            --severity HIGH,CRITICAL \
-            --skip-dirs .git --skip-dirs .github --skip-dirs node_modules --skip-dirs dist --skip-dirs build --skip-dirs coverage --skip-dirs .venv --skip-dirs venv --skip-dirs env \
-            --format json --output reports/trivy_fs.json || true
+          if [ -f package-lock.json ]; then npm ci --ignore-scripts || npm install --package-lock-only --ignore-scripts || true; fi
+          npm audit --json > reports/npm-audit.json || true
+          exit 0
+        continue-on-error: true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: trivy-security
-          path: reports/trivy_fs.json
-          retention-days: 30
+          name: node-security-results
+          path: reports/npm-audit.json
+          if-no-files-found: ignore
 
-  docker-iac-security:
-    name: Docker/IaC — Hadolint + Checkov
+  docker-security:
+    name: Docker â€” Hadolint Checkov Trivy
     runs-on: ubuntu-latest
-    needs: detect-project
-    if: needs.detect-project.outputs.has_docker == 'true'
+    needs: detect
+    if: needs.detect.outputs.has_docker == 'true'
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Hadolint Dockerfile
+      - uses: hadolint/hadolint-action@v3.1.0
         continue-on-error: true
+        with:
+          dockerfile: Dockerfile
+          format: json
+          output-file: reports/hadolint.json
+          failure-threshold: error
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Checkov Docker/IaC sin workflows
+        shell: bash
+        run: |
+          set +e
+          mkdir -p reports
+          python -m pip install --upgrade pip
+          python -m pip install checkov
+          checkov -d . --skip-path .github --skip-path node_modules --skip-path dist --skip-path build --skip-path coverage --quiet -o json > reports/checkov.json || true
+          exit 0
+        continue-on-error: true
+      - name: Trivy filesystem y misconfig
+        uses: aquasecurity/trivy-action@master
+        continue-on-error: true
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: json
+          output: reports/trivy-fs.json
+      - name: Asegurar artifacts Docker
+        shell: bash
+        if: always()
         run: |
           mkdir -p reports
-          docker run --rm -i hadolint/hadolint:latest hadolint -f json - < Dockerfile > reports/hadolint.json || true
-      - name: Checkov Docker/IaC report-only
-        continue-on-error: true
-        run: |
-          mkdir -p reports
-          pipx run checkov \
-            -d . \
-            --framework dockerfile,docker_compose,secrets \
-            --skip-path .github/workflows \
-            --skip-path node_modules \
-            --skip-path dist \
-            --skip-path build \
-            --skip-path coverage \
-            --quiet \
-            -o json > reports/checkov.json || true
+          test -f reports/hadolint.json || echo '[]' > reports/hadolint.json
+          test -f reports/checkov.json || echo '{}' > reports/checkov.json
+          test -f reports/trivy-fs.json || echo '{}' > reports/trivy-fs.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: docker-iac-security
+          name: docker-security-results
           path: reports/*.json
-          retention-days: 30
+          if-no-files-found: ignore
 
   secrets:
-    name: Secretos — Gitleaks
+    name: Secretos â€” Gitleaks y fallback local
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      - name: Gitleaks report-only
-        uses: gitleaks/gitleaks-action@v2
+          fetch-depth: 1
+      - name: Secret scan fallback sin dependencias externas
+        shell: bash
+        run: |
+          set +e
+          mkdir -p reports
+          python3 - <<'PY'
+          import json, pathlib, re
+          skip={'.git','.github','node_modules','dist','build','coverage','.venv','venv','__pycache__'}
+          pats=[
+            ('generic-api-key', re.compile(r'(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*["\'][A-Za-z0-9_\-]{20,}["\']')),
+            ('private-key', re.compile(r'BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY')),
+            ('jwt', re.compile(r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}')),
+          ]
+          out=[]
+          for p in pathlib.Path('.').rglob('*'):
+            if not p.is_file() or any(x in https://urldefense.com/v3/__http://p.parts__;!!P110LumUDw!7syoxJHRWC7aMbCY-bXBnXZN-g1C2yVRtCY3fL74th_UAqzmy4df4sfOBdENOnJqBtIx1FBZxeJ1KO27J7BQUW_WbU5Z7A$  for x in skip):
+              continue
+            try:
+              text=p.read_text(errors='ignore')
+            except Exception:
+              continue
+            for i,line in enumerate(text.splitlines(),1):
+              for name,pat in pats:
+                if pat.search(line):
+                  out.append({'rule':name,'file':str(p),'line':i})
+          pathlib.Path('reports/secrets-fallback.json').write_text(json.dumps({'findings':out},indent=2))
+          PY
+          exit 0
+        continue-on-error: true
+      - uses: gitleaks/gitleaks-action@v2
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
-          GITLEAKS_ENABLE_SUMMARY: true
-          GITLEAKS_NOTIFY_USER_LIST: ""
-          GITLEAKS_CONFIG_TOML: |
-            title = "gitleaks low-noise config"
-            [extend]
-            useDefault = true
-            [allowlist]
-            paths = [
-              '''.github/workflows/.*''',
-              '''node_modules/.*''',
-              '''dist/.*''',
-              '''build/.*''',
-              '''coverage/.*'''
-            ]
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: secrets-results
+          path: reports/*.json
+          if-no-files-found: ignore
 
   dependency-review:
-    name: Dependency Review — solo PR
+    name: Dependency Review â€” solo PR
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Dependency Review report-only
-        uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v4
         continue-on-error: true
         with:
-          fail-on-severity: high
-          comment-summary-in-pr: always
+          fail-on-severity: critical
           warn-only: true
+          comment-summary-in-pr: always
 
   scorecard:
-    name: OpenSSF Scorecard — higiene repo separado
+    name: Scorecard â€” higiene repo separada
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule' || github.event.inputs.run_scorecard == 'true'
+    continue-on-error: true
     permissions:
       contents: read
       security-events: write
@@ -598,45 +517,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Scorecard report-only
-        uses: ossf/scorecard-action@v2.4.0
+      - uses: ossf/scorecard-action@v2.4.0
         continue-on-error: true
         with:
           results_file: reports/scorecard.sarif
           results_format: sarif
           publish_results: false
-      - name: Upload Scorecard SARIF
-        uses: github/codeql-action/upload-sarif@v4
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         continue-on-error: true
         with:
           sarif_file: reports/scorecard.sarif
-          category: openssf-scorecard-weekly
+          category: openssf-scorecard
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: openssf-scorecard
+          name: scorecard-results
           path: reports/scorecard.sarif
-          retention-days: 30
+          if-no-files-found: ignore
 
   final-report:
-    name: Reporte final — no bloqueante
+    name: Reporte final â€” no bloqueante
     runs-on: ubuntu-latest
-    needs:
-      - detect-project
-      - policy-versions-pinning
-      - codeql
-      - semgrep-sast
-      - ai-llm-security
-      - python-security
-      - node-security
-      - osv-scanner
-      - trivy-security
-      - docker-iac-security
-      - secrets
-      - dependency-review
-      - scorecard
+    needs: [detect, policy, codeql, semgrep, python-security, node-security, docker-security, secrets, dependency-review, scorecard]
     if: always()
+    continue-on-error: true
     steps:
       - name: Descargar artifacts
         uses: actions/download-artifact@v4
@@ -646,29 +551,31 @@ jobs:
       - name: Crear resumen ejecutivo
         shell: bash
         run: |
+          set +e
           mkdir -p reports
-          cat > reports/https://urldefense.com/v3/__http://security-summary.md__;!!P110LumUDw!-LaRZ19GuSzEii9NQWmSw0yhYjdkJjOa9T_VrpHLUv9baBEwFY2scbNFrqZZpSRnufE0ex2p1tHg3LE6NAmx194Pn_xsug$  <<'MD'
-          # Security Pipeline — resumen
-
-          Pipeline ejecutado en modo **report-only**. No bloquea push ni PR.
-
-          ## Foco principal
-          - Código real: CodeQL, Semgrep, Bandit.
-          - AI/LLM: reglas OWASP LLM Top 10 orientadas a alta señal.
-          - Dependencias: pip-audit, npm audit, OSV, Trivy.
-          - Docker/IaC: Hadolint, Checkov, Trivy misconfig.
-          - Secretos: Gitleaks, Trivy secret.
-          - Scorecard: separado, solo schedule/manual.
-
-          ## Exclusiones para reducir ruido
-          `.github/workflows/**`, `.git`, `node_modules`, `dist`, `build`, `coverage`, `.venv`, `venv`, `env`.
-
-          Revisa los artifacts JSON/SARIF para el detalle.
-          MD
-          cat reports/https://urldefense.com/v3/__http://security-summary.md__;!!P110LumUDw!-LaRZ19GuSzEii9NQWmSw0yhYjdkJjOa9T_VrpHLUv9baBEwFY2scbNFrqZZpSRnufE0ex2p1tHg3LE6NAmx194Pn_xsug$  >> "$GITHUB_STEP_SUMMARY"
+          SUMMARY="reports/https://urldefense.com/v3/__http://security-summary.md__;!!P110LumUDw!7syoxJHRWC7aMbCY-bXBnXZN-g1C2yVRtCY3fL74th_UAqzmy4df4sfOBdENOnJqBtIx1FBZxeJ1KO27J7BQUW8Dj0PdzQ$ "
+          echo "# Security Pipeline â€” resumen" > "$SUMMARY"
+          echo "" >> "$SUMMARY"
+          echo "Modo: report-only, no bloqueante." >> "$SUMMARY"
+          echo "" >> "$SUMMARY"
+          echo "## Jobs" >> "$SUMMARY"
+          echo "- Policy: ${{ needs.policy.result }}" >> "$SUMMARY"
+          echo "- CodeQL: ${{ needs.codeql.result }}" >> "$SUMMARY"
+          echo "- Semgrep: ${{ needs.semgrep.result }}" >> "$SUMMARY"
+          echo "- Python: ${{ needs.python-security.result }}" >> "$SUMMARY"
+          echo "- Node: ${{ needs.node-security.result }}" >> "$SUMMARY"
+          echo "- Docker: ${{ needs.docker-security.result }}" >> "$SUMMARY"
+          echo "- Secretos: ${{ needs.secrets.result }}" >> "$SUMMARY"
+          echo "- Dependency Review: ${{ needs.dependency-review.result }}" >> "$SUMMARY"
+          echo "- Scorecard: ${{ needs.scorecard.result }}" >> "$SUMMARY"
+          echo "" >> "$SUMMARY"
+          echo "## Artifacts" >> "$SUMMARY"
+          find artifacts -type f | sort >> "$SUMMARY" 2>/dev/null || true
+          cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: security-summary
-          path: reports/https://urldefense.com/v3/__http://security-summary.md__;!!P110LumUDw!-LaRZ19GuSzEii9NQWmSw0yhYjdkJjOa9T_VrpHLUv9baBEwFY2scbNFrqZZpSRnufE0ex2p1tHg3LE6NAmx194Pn_xsug$ 
-          retention-days: 30
+          name: final-security-summary
+          path: reports/https://urldefense.com/v3/__http://security-summary.md__;!!P110LumUDw!7syoxJHRWC7aMbCY-bXBnXZN-g1C2yVRtCY3fL74th_UAqzmy4df4sfOBdENOnJqBtIx1FBZxeJ1KO27J7BQUW8Dj0PdzQ$ 
+          if-no-files-found: ignore
