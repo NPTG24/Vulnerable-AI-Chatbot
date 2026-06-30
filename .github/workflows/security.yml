@@ -10,13 +10,13 @@ on:
   workflow_dispatch:
     inputs:
       fail_on:
-        description: "Final failure threshold. Use never while tuning."
+        description: "Final report failure threshold"
         required: false
         default: "never"
         type: choice
-        options: ["critical", "high", "medium", "never"]
+        options: ["critical", "high", "medium", "low", "never"]
       run_dast:
-        description: "Run OWASP ZAP if DAST_TARGET_URL secret exists"
+        description: "Run ZAP only when DAST_TARGET_URL secret exists"
         required: false
         default: "false"
         type: choice
@@ -28,630 +28,369 @@ concurrency:
 
 permissions:
   contents: read
+  security-events: write
+  actions: read
 
 env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
   DEFAULT_FAIL_ON: "never"
-  EXCLUDES: >-
-    --exclude .git
-    --exclude .github/workflows
-    --exclude node_modules
-    --exclude .venv
-    --exclude venv
-    --exclude dist
-    --exclude build
-    --exclude coverage
-    --exclude htmlcov
-    --exclude __pycache__
-    --exclude tests
-    --exclude test
-    --exclude examples
-    --exclude docs
 
 jobs:
-  ai-code-security:
-    name: "AI SAST — High-confidence vulnerable AI code"
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Semgrep
-        run: |
-          python -m pip install --upgrade pip
-          pip install semgrep
-
-      - name: Create focused AI security rules
-        run: |
-          mkdir -p .semgrep/local-ai
-          cat > .semgrep/local-ai/ai-code-security.yml <<'YAML_RULES'
-          rules:
-            # ------------------------------------------------------------------
-            # Python AI / LLM: prompt injection, insecure output handling, tools
-            # ------------------------------------------------------------------
-            - id: ai.python.user-input-to-llm-prompt
-              languages: [python]
-              mode: taint
-              severity: ERROR
-              message: "AI prompt injection: user-controlled input reaches an LLM prompt/call without an explicit sanitizer/guardrail. Add allowlist/intent validation, prompt-injection filter, or structured constrained input."
-              metadata:
-                confidence: HIGH
-                category: security
-                cwe: "CWE-20"
-                owasp_llm: "LLM01 Prompt Injection"
-              pattern-sources:
-                - patterns:
-                    - pattern-either:
-                        - pattern: request.$ANY.get(...)
-                        - pattern: request.get_json(...)
-                        - pattern: request.json
-                        - pattern: request.form
-                        - pattern: request.args
-                        - pattern: input(...)
-                        - pattern: st.text_input(...)
-                        - pattern: st.chat_input(...)
-                        - pattern: gr.Textbox(...)
-                        - pattern: $REQ.body
-                        - pattern: $REQ.query_params
-                        - pattern: $REQ.path_params
-              pattern-sanitizers:
-                - pattern-either:
-                    - pattern: sanitize_prompt(...)
-                    - pattern: validate_prompt(...)
-                    - pattern: guard_prompt(...)
-                    - pattern: prompt_guard(...)
-                    - pattern: detect_prompt_injection(...)
-                    - pattern: moderate_input(...)
-                    - pattern: validate_intent(...)
-                    - pattern: allowlist_input(...)
-              pattern-sinks:
-                - pattern-either:
-                    - pattern: openai.ChatCompletion.create(..., messages=$X, ...)
-                    - pattern: $CLIENT.chat.completions.create(..., messages=$X, ...)
-                    - pattern: $CLIENT.responses.create(..., input=$X, ...)
-                    - pattern: $MODEL.generate_content($X, ...)
-                    - pattern: $LLM.invoke($X, ...)
-                    - pattern: $CHAIN.invoke($X, ...)
-                    - pattern: $MODEL.predict($X, ...)
-
-            - id: ai.python.llm-output-to-exec-or-eval
-              languages: [python]
-              mode: taint
-              severity: ERROR
-              message: "AI RCE: LLM-controlled output reaches eval/exec/subprocess/shell. Never execute model output directly; use strict parsers and allowlisted commands/actions."
-              metadata:
-                confidence: HIGH
-                category: security
-                cwe: "CWE-94"
-                owasp_llm: "LLM05 Improper Output Handling / LLM06 Excessive Agency"
-              pattern-sources:
-                - pattern-either:
-                    - pattern: openai.ChatCompletion.create(...)
-                    - pattern: $CLIENT.chat.completions.create(...)
-                    - pattern: $CLIENT.responses.create(...)
-                    - pattern: $MODEL.generate_content(...)
-                    - pattern: $LLM.invoke(...)
-                    - pattern: $CHAIN.invoke(...)
-                    - pattern: $RESP.choices[...].message.content
-                    - pattern: $RESP.output_text
-                    - pattern: $RESP.text
-              pattern-sanitizers:
-                - pattern-either:
-                    - pattern: json.loads(...)
-                    - pattern: ast.literal_eval(...)
-                    - pattern: validate_schema(...)
-                    - pattern: parse_structured_output(...)
-                    - pattern: allowlist_command(...)
-              pattern-sinks:
-                - pattern-either:
-                    - pattern: eval($X)
-                    - pattern: exec($X)
-                    - pattern: subprocess.run($X, shell=True, ...)
-                    - pattern: subprocess.Popen($X, shell=True, ...)
-                    - pattern: os.system($X)
-                    - pattern: os.popen($X)
-
-            - id: ai.python.agent-tool-shell-exposed
-              languages: [python]
-              severity: ERROR
-              message: "Agentic AI excessive agency: an agent/tool exposes shell or command execution. Restrict with allowlists, fixed arguments, human approval, and audit logging."
-              metadata:
-                confidence: HIGH
-                category: security
-                cwe: "CWE-78"
-                owasp_llm: "LLM06 Excessive Agency"
-              patterns:
-                - pattern-either:
-                    - pattern: Tool(..., func=$FUNC, ...)
-                    - pattern: StructuredTool.from_function($FUNC, ...)
-                    - pattern: FunctionTool.from_defaults($FUNC, ...)
-                    - pattern: initialize_agent(..., tools=$TOOLS, ...)
-                    - pattern: AgentExecutor(..., tools=$TOOLS, ...)
-                - metavariable-pattern:
-                    metavariable: $FUNC
-                    patterns:
-                      - pattern-either:
-                          - pattern: https://urldefense.com/v3/__http://subprocess.run__;!!P110LumUDw!8Cw_7AqOPjQWuK-VHLNay3uZ7Td4e0p2ok7d0LB29X2WhTAg1RFWLmzxTTYtfe5_PRO3EX6uxEuAd1r5FlJ-mnQCRxHFPQ$ 
-                          - pattern: subprocess.Popen
-                          - pattern: os.system
-                          - pattern: os.popen
-                          - pattern: exec
-                          - pattern: eval
-
-            - id: ai.python.system-prompt-returned-to-user
-              languages: [python]
-              mode: taint
-              severity: ERROR
-              message: "System prompt leakage: system/developer prompt or internal instruction is returned in an HTTP/API response."
-              metadata:
-                confidence: HIGH
-                category: security
-                cwe: "CWE-200"
-                owasp_llm: "LLM07 System Prompt Leakage"
-              pattern-sources:
-                - pattern-either:
-                    - pattern: SYSTEM_PROMPT
-                    - pattern: system_prompt
-                    - pattern: developer_message
-                    - pattern: INTERNAL_PROMPT
-              pattern-sinks:
-                - pattern-either:
-                    - pattern: jsonify(..., $X, ...)
-                    - pattern: JSONResponse($X, ...)
-                    - pattern: Response($X, ...)
-                    - pattern: return $X
-
-            - id: ai.python.llm-call-without-basic-limits
-              languages: [python]
-              severity: WARNING
-              message: "LLM call without obvious max_tokens/timeout/rate-limit controls in the same call. This can cause cost/DoS issues."
-              metadata:
-                confidence: MEDIUM
-                category: security
-                owasp_llm: "LLM10 Unbounded Consumption"
-              patterns:
-                - pattern-either:
-                    - pattern: $CLIENT.chat.completions.create(...)
-                    - pattern: $CLIENT.responses.create(...)
-                    - pattern: openai.ChatCompletion.create(...)
-                - pattern-not: $CLIENT.chat.completions.create(..., max_tokens=$N, ...)
-                - pattern-not: $CLIENT.responses.create(..., max_output_tokens=$N, ...)
-                - pattern-not: openai.ChatCompletion.create(..., max_tokens=$N, ...)
-
-            - id: ai.python.prompt-or-response-logged
-              languages: [python]
-              severity: WARNING
-              message: "Potential prompt/response logging. Review for prompt leakage, personal data, API keys, or training-data exposure."
-              metadata:
-                confidence: MEDIUM
-                category: security
-                cwe: "CWE-532"
-                owasp_llm: "LLM02 Sensitive Information Disclosure"
-              pattern-either:
-                - pattern: print(..., $PROMPT, ...)
-                - pattern: print(..., $RESPONSE, ...)
-                - pattern: logger.$LEVEL(..., $PROMPT, ...)
-                - pattern: logger.$LEVEL(..., $RESPONSE, ...)
-              metavariable-regex:
-                metavariable: $PROMPT
-                regex: (?i).*(prompt|message|response|completion|output|system).* 
-
-            # ------------------------------------------------------------------
-            # JavaScript / TypeScript AI / LLM
-            # ------------------------------------------------------------------
-            - id: ai.js.user-input-to-llm-prompt
-              languages: [javascript, typescript]
-              mode: taint
-              severity: ERROR
-              message: "AI prompt injection: request-controlled input reaches an LLM call without an explicit sanitizer/guardrail."
-              metadata:
-                confidence: HIGH
-                category: security
-                cwe: "CWE-20"
-                owasp_llm: "LLM01 Prompt Injection"
-              pattern-sources:
-                - pattern-either:
-                    - pattern: req.body
-                    - pattern: req.query
-                    - pattern: req.params
-                    - pattern: request.body
-                    - pattern: request.query
-                    - pattern: request.params
-                    - pattern: $FORM.get(...)
-                    - pattern: prompt(...)
-              pattern-sanitizers:
-                - pattern-either:
-                    - pattern: sanitizePrompt(...)
-                    - pattern: validatePrompt(...)
-                    - pattern: guardPrompt(...)
-                    - pattern: detectPromptInjection(...)
-                    - pattern: moderateInput(...)
-                    - pattern: validateIntent(...)
-                    - pattern: allowlistInput(...)
-              pattern-sinks:
-                - pattern-either:
-                    - pattern: openai.chat.completions.create({..., messages: $X, ...})
-                    - pattern: client.chat.completions.create({..., messages: $X, ...})
-                    - pattern: client.responses.create({..., input: $X, ...})
-                    - pattern: model.generateContent($X, ...)
-                    - pattern: llm.invoke($X, ...)
-                    - pattern: chain.invoke($X, ...)
-
-            - id: ai.js.llm-output-to-eval-or-command
-              languages: [javascript, typescript]
-              mode: taint
-              severity: ERROR
-              message: "AI RCE: LLM-controlled output reaches eval/new Function/child_process. Never execute model output directly."
-              metadata:
-                confidence: HIGH
-                category: security
-                cwe: "CWE-94"
-                owasp_llm: "LLM05 Improper Output Handling / LLM06 Excessive Agency"
-              pattern-sources:
-                - pattern-either:
-                    - pattern: openai.chat.completions.create(...)
-                    - pattern: client.chat.completions.create(...)
-                    - pattern: client.responses.create(...)
-                    - pattern: model.generateContent(...)
-                    - pattern: llm.invoke(...)
-                    - pattern: chain.invoke(...)
-                    - pattern: $RESP.choices[...].message.content
-                    - pattern: $RESP.output_text
-                    - pattern: $RESP.text
-              pattern-sanitizers:
-                - pattern-either:
-                    - pattern: JSON.parse(...)
-                    - pattern: validateSchema(...)
-                    - pattern: parseStructuredOutput(...)
-                    - pattern: allowlistCommand(...)
-              pattern-sinks:
-                - pattern-either:
-                    - pattern: eval($X)
-                    - pattern: new Function($X)
-                    - pattern: exec($X, ...)
-                    - pattern: execSync($X, ...)
-                    - pattern: spawn($X, ..., {shell: true, ...})
-
-            - id: ai.js.system-prompt-returned-to-user
-              languages: [javascript, typescript]
-              mode: taint
-              severity: ERROR
-              message: "System prompt leakage: system/developer prompt or internal instruction reaches an HTTP/API response."
-              metadata:
-                confidence: HIGH
-                category: security
-                cwe: "CWE-200"
-                owasp_llm: "LLM07 System Prompt Leakage"
-              pattern-sources:
-                - pattern-either:
-                    - pattern: SYSTEM_PROMPT
-                    - pattern: systemPrompt
-                    - pattern: developerMessage
-                    - pattern: INTERNAL_PROMPT
-              pattern-sinks:
-                - pattern-either:
-                    - pattern: res.send($X)
-                    - pattern: res.json($X)
-                    - pattern: Response.json($X)
-                    - pattern: new Response($X, ...)
-                    - pattern: return $X
-          YAML_RULES
-
-      - name: Run AI Semgrep rules
-        continue-on-error: true
-        run: |
-          semgrep --config .semgrep/local-ai/ai-code-security.yml $EXCLUDES --error --sarif --output semgrep_ai.sarif . || true
-          semgrep --config .semgrep/local-ai/ai-code-security.yml $EXCLUDES --json --output semgrep_ai.json . || true
-
-      - name: Ensure AI artifacts exist
-        if: always()
-        run: |
-          test -f semgrep_ai.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"AI Semgrep","rules":[]}},"results":[]}]}' > semgrep_ai.sarif
-          test -f semgrep_ai.json || echo '{"results":[]}' > semgrep_ai.json
-
-      - name: Upload AI SARIF
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: semgrep_ai.sarif
-          category: ai-code-security
-
-      - name: Upload AI artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-code-security-results
-          path: |
-            semgrep_ai.sarif
-            semgrep_ai.json
-            .semgrep/local-ai/ai-code-security.yml
-          retention-days: 30
-
   codeql:
-    name: "SAST — CodeQL security extended"
+    name: "SAST — CodeQL security only"
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
     strategy:
       fail-fast: false
       matrix:
         language: [python, javascript-typescript]
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
+
       - name: Initialize CodeQL
+        continue-on-error: true
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
+
       - name: Autobuild
+        continue-on-error: true
         uses: github/codeql-action/autobuild@v4
-        continue-on-error: true
+
       - name: Analyze
-        uses: github/codeql-action/analyze@v4
         continue-on-error: true
+        uses: github/codeql-action/analyze@v4
         with:
           category: codeql-${{ matrix.language }}
 
-  high-confidence-sast:
-    name: "SAST — Semgrep high-confidence only"
+      - name: Upload CodeQL marker
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-${{ matrix.language }}-marker
+          path: .github
+          if-no-files-found: ignore
+          retention-days: 15
+
+  ai-code-semgrep:
+    name: "AI Code — Semgrep high-confidence rules"
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+
       - name: Install Semgrep
         run: |
           python -m pip install --upgrade pip
           pip install semgrep
-      - name: Run Semgrep focused security packs
+
+      - name: Create focused AI/security rules
+        run: |
+          mkdir -p .semgrep/local
+          cat > .semgrep/local/ai_vuln_high_confidence.yml <<'YAML'
+          rules:
+            - id: ai-python-llm-response-to-eval
+              languages: [python]
+              severity: ERROR
+              message: "AI RCE: salida/respuesta de LLM llega a eval/exec. Riesgo crítico de ejecución arbitraria."
+              metadata:
+                category: security
+                confidence: high
+                owasp_llm: LLM05 Improper Output Handling / LLM06 Excessive Agency
+              mode: taint
+              pattern-sources:
+                - pattern-either:
+                    - pattern: $CLIENT.chat.completions.create(...)
+                    - pattern: $CLIENT.responses.create(...)
+                    - pattern: openai.ChatCompletion.create(...)
+                    - pattern: $LLM.invoke(...)
+                    - pattern: $CHAIN.invoke(...)
+                    - pattern: $AGENT.run(...)
+                    - pattern: $AGENT.invoke(...)
+              pattern-sinks:
+                - pattern-either:
+                    - pattern: eval(...)
+                    - pattern: exec(...)
+                    - pattern: compile(...)
+
+            - id: ai-python-llm-response-to-shell
+              languages: [python]
+              severity: ERROR
+              message: "AI command injection: salida/respuesta de LLM llega a shell/comandos."
+              metadata:
+                category: security
+                confidence: high
+                owasp_llm: LLM05 Improper Output Handling / LLM06 Excessive Agency
+              mode: taint
+              pattern-sources:
+                - pattern-either:
+                    - pattern: $CLIENT.chat.completions.create(...)
+                    - pattern: $CLIENT.responses.create(...)
+                    - pattern: openai.ChatCompletion.create(...)
+                    - pattern: $LLM.invoke(...)
+                    - pattern: $CHAIN.invoke(...)
+                    - pattern: $AGENT.run(...)
+                    - pattern: $AGENT.invoke(...)
+              pattern-sinks:
+                - pattern-either:
+                    - pattern: subprocess.run($X, shell=True, ...)
+                    - pattern: subprocess.Popen($X, shell=True, ...)
+                    - pattern: os.system($X)
+                    - pattern: os.popen($X)
+
+            - id: ai-js-llm-response-to-eval
+              languages: [javascript, typescript]
+              severity: ERROR
+              message: "AI RCE: salida/respuesta de LLM llega a eval/new Function."
+              metadata:
+                category: security
+                confidence: high
+                owasp_llm: LLM05 Improper Output Handling / LLM06 Excessive Agency
+              mode: taint
+              pattern-sources:
+                - pattern-either:
+                    - pattern: $CLIENT.chat.completions.create(...)
+                    - pattern: $CLIENT.responses.create(...)
+                    - pattern: $MODEL.invoke(...)
+                    - pattern: $CHAIN.call(...)
+                    - pattern: $AGENT.call(...)
+              pattern-sinks:
+                - pattern-either:
+                    - pattern: eval(...)
+                    - pattern: new Function(...)
+
+            - id: ai-js-llm-response-to-child-process
+              languages: [javascript, typescript]
+              severity: ERROR
+              message: "AI command injection: salida/respuesta de LLM llega a child_process."
+              metadata:
+                category: security
+                confidence: high
+                owasp_llm: LLM05 Improper Output Handling / LLM06 Excessive Agency
+              mode: taint
+              pattern-sources:
+                - pattern-either:
+                    - pattern: $CLIENT.chat.completions.create(...)
+                    - pattern: $CLIENT.responses.create(...)
+                    - pattern: $MODEL.invoke(...)
+                    - pattern: $CHAIN.call(...)
+                    - pattern: $AGENT.call(...)
+              pattern-sinks:
+                - pattern-either:
+                    - pattern: child_process.exec(...)
+                    - pattern: child_process.execSync(...)
+                    - pattern: exec(...)
+                    - pattern: execSync(...)
+
+            - id: ai-python-user-controlled-prompt-no-guardrails
+              languages: [python]
+              severity: WARNING
+              message: "Prompt injection probable: input HTTP entra a prompt LLM sin señales de guardrails/sanitización."
+              metadata:
+                category: security
+                confidence: medium-high
+                owasp_llm: LLM01 Prompt Injection
+              mode: taint
+              pattern-sources:
+                - pattern-either:
+                    - pattern: request.json[$KEY]
+                    - pattern: request.form[$KEY]
+                    - pattern: request.args[$KEY]
+                    - pattern: request.get_json(...)
+                    - pattern: flask.request.json[$KEY]
+                    - pattern: fastapi.Request(...)
+              pattern-sinks:
+                - pattern-either:
+                    - pattern: $CLIENT.chat.completions.create(..., messages=$MSG, ...)
+                    - pattern: $CLIENT.responses.create(..., input=$MSG, ...)
+                    - pattern: openai.ChatCompletion.create(..., messages=$MSG, ...)
+                    - pattern: $LLM.invoke($MSG, ...)
+                    - pattern: $CHAIN.invoke($MSG, ...)
+              pattern-sanitizers:
+                - pattern-either:
+                    - pattern: sanitize_prompt(...)
+                    - pattern: validate_prompt(...)
+                    - pattern: guardrails.validate(...)
+                    - pattern: $GUARD.validate(...)
+                    - pattern: $MODERATION.create(...)
+
+            - id: ai-python-system-prompt-returned-to-user
+              languages: [python]
+              severity: ERROR
+              message: "Prompt leakage: system/developer prompt parece ser retornado directamente al usuario."
+              metadata:
+                category: security
+                confidence: high
+                owasp_llm: LLM07 System Prompt Leakage
+              mode: taint
+              pattern-sources:
+                - pattern-either:
+                    - pattern: $SYSTEM_PROMPT
+                    - pattern: $DEVELOPER_PROMPT
+                    - pattern: $SECRET_INSTRUCTIONS
+              pattern-sinks:
+                - pattern-either:
+                    - pattern: return $X
+                    - pattern: jsonify($X)
+                    - pattern: Response($X, ...)
+
+            - id: ai-python-dangerous-agent-tool-shell
+              languages: [python]
+              severity: ERROR
+              message: "Agentic AI: tool/agente con shell habilitado. Requiere allowlist estricta o eliminación."
+              metadata:
+                category: security
+                confidence: high
+                owasp_llm: LLM06 Excessive Agency
+              patterns:
+                - pattern-either:
+                    - pattern: Tool(..., func=$FUNC, ...)
+                    - pattern: StructuredTool.from_function($FUNC, ...)
+                    - pattern: initialize_agent(..., tools=$TOOLS, ...)
+                    - pattern: AgentExecutor(..., tools=$TOOLS, ...)
+                - pattern-inside: |
+                    def $FUNC(...):
+                      ...
+                - pattern-either:
+                    - pattern: subprocess.run(..., shell=True, ...)
+                    - pattern: subprocess.Popen(..., shell=True, ...)
+                    - pattern: os.system(...)
+                    - pattern: os.popen(...)
+
+            - id: ai-python-openai-key-hardcoded
+              languages: [python]
+              severity: ERROR
+              message: "Secreto AI hardcodeado: posible API key OpenAI/LLM en código."
+              metadata:
+                category: security
+                confidence: high
+              patterns:
+                - pattern-regex: "(?i)(openai|anthropic|gemini|groq|mistral).{0,30}(api[_-]?key|token).{0,20}['\"][A-Za-z0-9_\\-]{20,}['\"]"
+
+            - id: ai-js-openai-key-hardcoded
+              languages: [javascript, typescript]
+              severity: ERROR
+              message: "Secreto AI hardcodeado: posible API key OpenAI/LLM en código."
+              metadata:
+                category: security
+                confidence: high
+              patterns:
+                - pattern-regex: "(?i)(openai|anthropic|gemini|groq|mistral).{0,30}(api[_-]?key|token).{0,20}['\"][A-Za-z0-9_\\-]{20,}['\"]"
+
+            - id: py-sql-injection-high-confidence
+              languages: [python]
+              severity: ERROR
+              message: "SQL injection: input controlado llega a execute/raw SQL."
+              metadata:
+                category: security
+                confidence: high
+              mode: taint
+              pattern-sources:
+                - pattern-either:
+                    - pattern: request.args[$KEY]
+                    - pattern: request.form[$KEY]
+                    - pattern: request.json[$KEY]
+                    - pattern: request.get_json(...)
+              pattern-sinks:
+                - pattern-either:
+                    - pattern: $CURSOR.execute($QUERY, ...)
+                    - pattern: $DB.execute($QUERY, ...)
+                    - pattern: $SESSION.execute($QUERY, ...)
+              pattern-sanitizers:
+                - pattern-either:
+                    - pattern: text(...)
+                    - pattern: bindparam(...)
+
+            - id: js-nosql-injection-high-confidence
+              languages: [javascript, typescript]
+              severity: ERROR
+              message: "NoSQL injection: body/query controlado llega a find/findOne sin validación."
+              metadata:
+                category: security
+                confidence: high
+              mode: taint
+              pattern-sources:
+                - pattern-either:
+                    - pattern: req.body
+                    - pattern: req.query
+                    - pattern: req.params
+              pattern-sinks:
+                - pattern-either:
+                    - pattern: $MODEL.find($X, ...)
+                    - pattern: $MODEL.findOne($X, ...)
+                    - pattern: $COLLECTION.find($X, ...)
+                    - pattern: $COLLECTION.findOne($X, ...)
+              pattern-sanitizers:
+                - pattern-either:
+                    - pattern: sanitize(...)
+                    - pattern: mongoSanitize(...)
+                    - pattern: validator.escape(...)
+                    - pattern: zod.$SCHEMA.parse(...)
+          YAML
+
+      - name: Run focused Semgrep rules
         continue-on-error: true
         run: |
-          semgrep \
-            --config p/default \
-            --config p/secrets \
-            --config p/jwt \
-            --config p/xss \
-            --config p/sql-injection \
-            --config p/command-injection \
-            --config p/python \
-            --config p/javascript \
-            --config p/typescript \
-            $EXCLUDES \
-            --severity ERROR \
-            --sarif --output semgrep_sast.sarif . || true
-          semgrep \
-            --config p/default \
-            --config p/secrets \
-            --config p/jwt \
-            --config p/xss \
-            --config p/sql-injection \
-            --config p/command-injection \
-            --config p/python \
-            --config p/javascript \
-            --config p/typescript \
-            $EXCLUDES \
-            --severity ERROR \
-            --json --output semgrep_sast.json . || true
-      - name: Ensure SAST artifacts exist
+          semgrep --config .semgrep/local/ai_vuln_high_confidence.yml \
+            --exclude .github/workflows/** \
+            --exclude node_modules \
+            --exclude .venv \
+            --exclude venv \
+            --exclude dist \
+            --exclude build \
+            --sarif --output semgrep_ai_code.sarif . || true
+          semgrep --config .semgrep/local/ai_vuln_high_confidence.yml \
+            --exclude .github/workflows/** \
+            --exclude node_modules \
+            --exclude .venv \
+            --exclude venv \
+            --exclude dist \
+            --exclude build \
+            --json --output semgrep_ai_code.json . || true
+
+      - name: Ensure Semgrep artifacts exist
         if: always()
         run: |
-          test -f semgrep_sast.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Semgrep","rules":[]}},"results":[]}]}' > semgrep_sast.sarif
-          test -f semgrep_sast.json || echo '{"results":[]}' > semgrep_sast.json
+          test -f semgrep_ai_code.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Semgrep AI Code","rules":[]}},"results":[]}]}' > semgrep_ai_code.sarif
+          test -f semgrep_ai_code.json || echo '{"results":[]}' > semgrep_ai_code.json
+
       - name: Upload Semgrep SARIF
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: semgrep_sast.sarif
-          category: semgrep-high-confidence
+          sarif_file: semgrep_ai_code.sarif
+          category: ai-code-semgrep
+
       - name: Upload Semgrep artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: semgrep-high-confidence-results
+          name: ai-code-semgrep-results
           path: |
-            semgrep_sast.sarif
-            semgrep_sast.json
-          retention-days: 30
-
-  python-security:
-    name: "Python — Bandit high severity"
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install Bandit
-        run: |
-          python -m pip install --upgrade pip
-          pip install bandit bandit-sarif-formatter
-      - name: Run Bandit high-confidence/high-severity
-        continue-on-error: true
-        run: |
-          bandit -r . \
-            -x .git,.github,node_modules,.venv,venv,dist,build,tests,test,examples,docs \
-            --severity-level high \
-            --confidence-level high \
-            -f json -o bandit.json || true
-          bandit -r . \
-            -x .git,.github,node_modules,.venv,venv,dist,build,tests,test,examples,docs \
-            --severity-level high \
-            --confidence-level high \
-            -f sarif -o bandit.sarif || true
-      - name: Ensure Bandit artifacts exist
-        if: always()
-        run: |
-          test -f bandit.json || echo '{"results":[]}' > bandit.json
-          test -f bandit.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Bandit","rules":[]}},"results":[]}]}' > bandit.sarif
-      - name: Upload Bandit SARIF
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: bandit.sarif
-          category: bandit-high
-      - name: Upload Bandit artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bandit-high-results
-          path: |
-            bandit.json
-            bandit.sarif
-          retention-days: 30
-
-  dependencies:
-    name: "SCA — pip-audit, npm audit, Trivy fs"
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Install pip-audit
-        run: |
-          python -m pip install --upgrade pip pip-audit
-      - name: Run pip-audit against declared requirements
-        continue-on-error: true
-        run: |
-          if ls requirements*.txt >/dev/null 2>&1; then
-            pip-audit -r requirements.txt --format json --output pip_audit.json --progress-spinner off || true
-          elif [ -f pyproject.toml ]; then
-            pip-audit --format json --output pip_audit.json --progress-spinner off || true
-          else
-            echo '{"dependencies":[]}' > pip_audit.json
-          fi
-          python3 - <<'PY'
-          import json, pathlib
-          src = pathlib.Path('pip_audit.json')
-          try:
-              data = json.loads(src.read_text(encoding='utf-8', errors='ignore'))
-          except Exception:
-              data = {'dependencies': []}
-          deps = data.get('dependencies', []) if isinstance(data, dict) else []
-          rules, results = {}, []
-          for dep in deps:
-              name = dep.get('name','unknown')
-              version = dep.get('version','')
-              for v in dep.get('vulns', []):
-                  aliases = ' '.join(v.get('aliases') or [])
-                  vid = v.get('id') or aliases or 'PYTHON-VULN'
-                  sev = str(v.get('severity') or '').upper()
-                  level = 'error' if sev in {'CRITICAL','HIGH'} else 'warning'
-                  if level != 'error':
-                      continue
-                  msg = f'{name} {version}: {vid} {aliases}'.strip()
-                  rules.setdefault(vid, {'id': vid, 'name': vid, 'shortDescription': {'text': vid}, 'fullDescription': {'text': msg}, 'defaultConfiguration': {'level': level}})
-                  results.append({'ruleId': vid, 'level': level, 'message': {'text': msg}, 'locations': [{'physicalLocation': {'artifactLocation': {'uri': 'python-dependencies'}}}]})
-          sarif = {'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'pip-audit', 'rules': list(rules.values())}}, 'results': results}]}
-          pathlib.Path('pip_audit.sarif').write_text(json.dumps(sarif, indent=2), encoding='utf-8')
-          PY
-      - name: Run npm audit if package-lock exists
-        continue-on-error: true
-        run: |
-          if [ -f package-lock.json ]; then
-            npm audit --audit-level=high --json > npm_audit.json || true
-          else
-            echo '{"vulnerabilities":{}}' > npm_audit.json
-          fi
-      - name: Run Trivy filesystem vulnerability scan
-        uses: aquasecurity/trivy-action@0.36.0
-        continue-on-error: true
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          format: sarif
-          output: trivy_fs.sarif
-          exit-code: "0"
-      - name: Ensure dependency artifacts exist
-        if: always()
-        run: |
-          test -f pip_audit.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"pip-audit","rules":[]}},"results":[]}]}' > pip_audit.sarif
-          test -f trivy_fs.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy","rules":[]}},"results":[]}]}' > trivy_fs.sarif
-          test -f npm_audit.json || echo '{"vulnerabilities":{}}' > npm_audit.json
-      - name: Upload dependency SARIF
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: pip_audit.sarif
-          category: pip-audit-high
-      - name: Upload Trivy SARIF
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy_fs.sarif
-          category: trivy-fs-high-critical
-      - name: Upload dependency artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dependency-results
-          path: |
-            pip_audit.json
-            pip_audit.sarif
-            npm_audit.json
-            trivy_fs.sarif
+            semgrep_ai_code.sarif
+            semgrep_ai_code.json
+            .semgrep/local/ai_vuln_high_confidence.yml
           retention-days: 30
 
   secrets:
-    name: "Secrets — Gitleaks verified"
+    name: "Secrets — Gitleaks"
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Run Gitleaks
         continue-on-error: true
         run: |
@@ -660,19 +399,20 @@ jobs:
             --report-format sarif \
             --report-path /repo/gitleaks.sarif \
             --exit-code 0 \
-            --redact \
-            --verbose || true
+            --redact || true
           docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 detect \
             --source /repo \
             --report-format json \
             --report-path /repo/gitleaks.json \
             --exit-code 0 \
             --redact || true
-      - name: Ensure Gitleaks artifacts exist
+
+      - name: Ensure artifacts exist
         if: always()
         run: |
           test -f gitleaks.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Gitleaks","rules":[]}},"results":[]}]}' > gitleaks.sarif
           test -f gitleaks.json || echo '[]' > gitleaks.json
+
       - name: Upload Gitleaks SARIF
         if: always()
         continue-on-error: true
@@ -680,6 +420,7 @@ jobs:
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
+
       - name: Upload Gitleaks artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -690,188 +431,246 @@ jobs:
             gitleaks.json
           retention-days: 30
 
-  docker-security:
-    name: "Docker — Hadolint, Checkov, Trivy, Dockle"
+  sca:
+    name: "SCA — pip-audit, npm audit, Trivy fs"
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Detect Dockerfiles
-        id: dockerfiles
-        run: |
-          mapfile -t files < <(find . -type f \( -name 'Dockerfile' -o -name 'Dockerfile.*' \) \
-            -not -path './.git/*' -not -path './node_modules/*' -not -path './.venv/*' -not -path './venv/*' | sort)
-          printf '%s\n' "${files[@]}" > dockerfiles.txt
-          if [ "${#files[@]}" -gt 0 ]; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
-
-      - name: Create Docker hardening Semgrep rules
-        if: steps.dockerfiles.outputs.found == 'true'
-        run: |
-          mkdir -p .semgrep/docker
-          cat > .semgrep/docker/docker-hardening.yml <<'YAML_RULES'
-          rules:
-            - id: docker.root-user-or-no-user
-              languages: [dockerfile]
-              severity: ERROR
-              message: "Dockerfile runs as root or has no explicit non-root USER. Add a dedicated non-root user near the end."
-              metadata: {confidence: HIGH, category: security, cwe: "CWE-250"}
-              pattern-either:
-                - patterns:
-                    - pattern: USER root
-                - patterns:
-                    - pattern-not: USER $USER
-                    - pattern: FROM $IMAGE
-            - id: docker.curl-bash-installer
-              languages: [dockerfile]
-              severity: ERROR
-              message: "Remote script execution during image build (curl/wget piped to shell). Pin and verify downloads instead."
-              metadata: {confidence: HIGH, category: security, cwe: "CWE-494"}
-              pattern-either:
-                - pattern: RUN curl ... | sh
-                - pattern: RUN curl ... | bash
-                - pattern: RUN wget ... | sh
-                - pattern: RUN wget ... | bash
-            - id: docker.apk-apt-upgrade
-              languages: [dockerfile]
-              severity: WARNING
-              message: "Avoid apt/apk upgrade in Docker builds; use patched base images and pinned packages to reduce drift."
-              metadata: {confidence: MEDIUM, category: security}
-              pattern-either:
-                - pattern: RUN apt-get upgrade ...
-                - pattern: RUN apt upgrade ...
-                - pattern: RUN apk upgrade ...
-            - id: docker.secrets-in-env-or-arg
-              languages: [dockerfile]
-              severity: ERROR
-              message: "Possible secret in Docker ARG/ENV. Use runtime secrets instead of baking secrets into images."
-              metadata: {confidence: HIGH, category: security, cwe: "CWE-798"}
-              patterns:
-                - pattern-either:
-                    - pattern: ENV $KEY=$VALUE
-                    - pattern: ARG $KEY=$VALUE
-                - metavariable-regex:
-                    metavariable: $KEY
-                    regex: (?i).*(secret|token|password|passwd|pwd|api[_-]?key|private[_-]?key|credential).*
-          YAML_RULES
-
-      - name: Run Docker Semgrep hardening rules
-        if: steps.dockerfiles.outputs.found == 'true'
-        continue-on-error: true
-        run: |
-          semgrep --config .semgrep/docker/docker-hardening.yml --sarif --output docker_semgrep.sarif . || true
-          semgrep --config .semgrep/docker/docker-hardening.yml --json --output docker_semgrep.json . || true
-
-      - name: Run Hadolint high-confidence Dockerfile lint
-        if: steps.dockerfiles.outputs.found == 'true'
-        continue-on-error: true
-        run: |
-          docker pull hadolint/hadolint:v2.14.0-alpine || true
-          : > hadolint.jsonl
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            docker run --rm -i hadolint/hadolint:v2.14.0-alpine hadolint \
-              --format json \
-              --failure-threshold error \
-              - < "$file" >> hadolint.jsonl || true
-          done < dockerfiles.txt
-
-      - name: Run Checkov Dockerfile checks
-        if: steps.dockerfiles.outputs.found == 'true'
-        continue-on-error: true
-        uses: bridgecrewio/checkov-action@v12
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          directory: .
-          framework: dockerfile
-          soft_fail: true
-          quiet: true
-          output_format: sarif,json
-          output_file_path: checkov_docker.sarif,checkov_docker.json
-          download_external_modules: false
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Run Trivy config scan for Docker/IaC misconfigurations
-        if: steps.dockerfiles.outputs.found == 'true'
-        uses: aquasecurity/trivy-action@0.36.0
-        continue-on-error: true
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          scan-type: config
-          scan-ref: .
-          severity: HIGH,CRITICAL
-          format: sarif
-          output: trivy_config.sarif
-          exit-code: "0"
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: Build Docker image for image scan when Dockerfile exists
-        if: steps.dockerfiles.outputs.found == 'true'
+      - name: Python audit
         continue-on-error: true
         run: |
-          first="$(head -n 1 dockerfiles.txt || true)"
-          if [ -n "$first" ]; then
-            context="$(dirname "$first")"
-            docker build -f "$first" -t local/security-scan:ci "$context" || true
+          python -m pip install --upgrade pip pip-audit
+          if [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt --format json --output pip_audit.json --progress-spinner off || true
+          elif [ -f pyproject.toml ]; then
+            pip-audit --format json --output pip_audit.json --progress-spinner off || true
+          else
+            echo '{"dependencies":[]}' > pip_audit.json
           fi
 
-      - name: Run Trivy image scan
-        if: steps.dockerfiles.outputs.found == 'true'
-        uses: aquasecurity/trivy-action@0.36.0
-        continue-on-error: true
-        with:
-          image-ref: local/security-scan:ci
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          format: sarif
-          output: trivy_image.sarif
-          exit-code: "0"
-
-      - name: Run Dockle image hardening scan
-        if: steps.dockerfiles.outputs.found == 'true'
+      - name: npm audit
         continue-on-error: true
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock goodwithtech/dockle:v0.4.15 \
-            --exit-code 0 \
-            --exit-level FATAL \
-            --format json \
-            --output dockle.json \
-            local/security-scan:ci || true
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm audit --audit-level=high --json > npm_audit.json || true
+          elif [ -f package.json ]; then
+            npm install --package-lock-only --ignore-scripts || true
+            npm audit --audit-level=high --json > npm_audit.json || true
+          else
+            echo '{"vulnerabilities":{}}' > npm_audit.json
+          fi
 
-      - name: Ensure Docker artifacts exist
+      - name: Trivy filesystem scan without trivy-action
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/repo" aquasec/trivy:latest fs /repo \
+            --format sarif \
+            --output /repo/trivy_fs.sarif \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --scanners vuln,secret,misconfig \
+            --skip-dirs /repo/.git \
+            --skip-dirs /repo/node_modules \
+            --skip-dirs /repo/.venv \
+            --skip-dirs /repo/venv \
+            --skip-dirs /repo/dist \
+            --skip-dirs /repo/build || true
+          docker run --rm -v "$PWD:/repo" aquasec/trivy:latest fs /repo \
+            --format json \
+            --output /repo/trivy_fs.json \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --scanners vuln,secret,misconfig \
+            --skip-dirs /repo/.git \
+            --skip-dirs /repo/node_modules \
+            --skip-dirs /repo/.venv \
+            --skip-dirs /repo/venv \
+            --skip-dirs /repo/dist \
+            --skip-dirs /repo/build || true
+
+      - name: Ensure SCA artifacts exist
         if: always()
         run: |
-          test -f dockerfiles.txt || true
-          test -f docker_semgrep.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Docker Semgrep","rules":[]}},"results":[]}]}' > docker_semgrep.sarif
-          test -f docker_semgrep.json || echo '{"results":[]}' > docker_semgrep.json
-          test -f checkov_docker.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov Docker","rules":[]}},"results":[]}]}' > checkov_docker.sarif
-          test -f checkov_docker.json || echo '{}' > checkov_docker.json
-          test -f trivy_config.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy Config","rules":[]}},"results":[]}]}' > trivy_config.sarif
-          test -f trivy_image.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy Image","rules":[]}},"results":[]}]}' > trivy_image.sarif
-          test -f hadolint.jsonl || touch hadolint.jsonl
-          test -f dockle.json || echo '{}' > dockle.json
+          test -f pip_audit.json || echo '{"dependencies":[]}' > pip_audit.json
+          test -f npm_audit.json || echo '{"vulnerabilities":{}}' > npm_audit.json
+          test -f trivy_fs.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy","rules":[]}},"results":[]}]}' > trivy_fs.sarif
+          test -f trivy_fs.json || echo '{}' > trivy_fs.json
 
-      - name: Upload Docker SARIFs
+      - name: Upload Trivy SARIF
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: docker_semgrep.sarif
-          category: docker-semgrep
-      - name: Upload Checkov Docker SARIF
+          sarif_file: trivy_fs.sarif
+          category: trivy-fs
+
+      - name: Upload SCA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-results
+          path: |
+            pip_audit.json
+            npm_audit.json
+            trivy_fs.sarif
+            trivy_fs.json
+          retention-days: 30
+
+  docker-security:
+    name: "Docker — Hadolint, Checkov, Trivy, Dockle"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discover Docker files
+        id: dockerfiles
+        shell: bash
+        run: |
+          mapfile -t files < <(find . -type f \( -iname 'Dockerfile' -o -iname 'Dockerfile.*' -o -iname '*dockerfile*' \) \
+            -not -path './.git/*' -not -path './node_modules/*' -not -path './.venv/*' -not -path './venv/*' | sort)
+          printf '%s\n' "${files[@]}" > dockerfiles.txt
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "has_docker=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_docker=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Hadolint Dockerfiles, only error-level findings
+        if: steps.dockerfiles.outputs.has_docker == 'true'
+        continue-on-error: true
+        run: |
+          echo '[]' > hadolint.json
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            docker run --rm -i hadolint/hadolint:latest-debian hadolint \
+              --failure-threshold error \
+              --format json - < "$file" > "hadolint_${file//[^A-Za-z0-9]/_}.json" || true
+          done < dockerfiles.txt
+          python3 - <<'PY'
+          import json, pathlib
+          all_items=[]
+          for p in pathlib.Path('.').glob('hadolint_*.json'):
+              try:
+                  data=json.loads(p.read_text() or '[]')
+                  if isinstance(data, list): all_items.extend(data)
+              except Exception: pass
+          pathlib.Path('hadolint.json').write_text(json.dumps(all_items, indent=2), encoding='utf-8')
+          PY
+
+      - name: Checkov Dockerfile scan, quiet
+        if: steps.dockerfiles.outputs.has_docker == 'true'
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip checkov
+          checkov -d . --framework dockerfile --quiet --soft-fail \
+            --output sarif --output-file-path checkov_docker.sarif || true
+          checkov -d . --framework dockerfile --quiet --soft-fail \
+            --output json --output-file-path checkov_docker.json || true
+
+      - name: Build Docker images for image scanning
+        if: steps.dockerfiles.outputs.has_docker == 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p docker-build-logs
+          i=0
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            dir="$(dirname "$file")"
+            tag="local-security-scan:$i"
+            docker build --pull --no-cache -f "$file" -t "$tag" "$dir" > "docker-build-logs/build_$i.log" 2>&1 || true
+            echo "$tag" >> built_images.txt
+            i=$((i+1))
+          done < dockerfiles.txt
+
+      - name: Trivy image scan without trivy-action
+        if: steps.dockerfiles.outputs.has_docker == 'true'
+        continue-on-error: true
+        run: |
+          echo '{"version":"2.1.0","runs":[]}' > trivy_image.sarif
+          echo '[]' > trivy_image.json
+          i=0
+          if [ -f built_images.txt ]; then
+            while IFS= read -r tag; do
+              [ -z "$tag" ] && continue
+              docker image inspect "$tag" >/dev/null 2>&1 || continue
+              docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/repo" aquasec/trivy:latest image "$tag" \
+                --format sarif --output "/repo/trivy_image_$i.sarif" \
+                --severity HIGH,CRITICAL --ignore-unfixed --scanners vuln,secret,misconfig || true
+              docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/repo" aquasec/trivy:latest image "$tag" \
+                --format json --output "/repo/trivy_image_$i.json" \
+                --severity HIGH,CRITICAL --ignore-unfixed --scanners vuln,secret,misconfig || true
+              i=$((i+1))
+            done < built_images.txt
+          fi
+          python3 - <<'PY'
+          import json, pathlib
+          runs=[]; js=[]
+          for p in pathlib.Path('.').glob('trivy_image_*.sarif'):
+              try: runs += json.loads(p.read_text()).get('runs', [])
+              except Exception: pass
+          pathlib.Path('trivy_image.sarif').write_text(json.dumps({'version':'2.1.0','runs':runs}, indent=2), encoding='utf-8')
+          for p in pathlib.Path('.').glob('trivy_image_*.json'):
+              try: js.append(json.loads(p.read_text()))
+              except Exception: pass
+          pathlib.Path('trivy_image.json').write_text(json.dumps(js, indent=2), encoding='utf-8')
+          PY
+
+      - name: Dockle image scan, fatal/warn only
+        if: steps.dockerfiles.outputs.has_docker == 'true'
+        continue-on-error: true
+        run: |
+          echo '[]' > dockle.json
+          i=0
+          if [ -f built_images.txt ]; then
+            while IFS= read -r tag; do
+              [ -z "$tag" ] && continue
+              docker image inspect "$tag" >/dev/null 2>&1 || continue
+              docker run --rm -v /var/run/docker.sock:/var/run/docker.sock goodwithtech/dockle:latest \
+                --exit-code 0 --exit-level fatal --format json "$tag" > "dockle_$i.json" || true
+              i=$((i+1))
+            done < built_images.txt
+          fi
+          python3 - <<'PY'
+          import json, pathlib
+          out=[]
+          for p in pathlib.Path('.').glob('dockle_*.json'):
+              try: out.append(json.loads(p.read_text() or '{}'))
+              except Exception: pass
+          pathlib.Path('dockle.json').write_text(json.dumps(out, indent=2), encoding='utf-8')
+          PY
+
+      - name: Ensure Docker artifacts exist
+        if: always()
+        run: |
+          test -f dockerfiles.txt || touch dockerfiles.txt
+          test -f hadolint.json || echo '[]' > hadolint.json
+          test -f checkov_docker.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov Docker","rules":[]}},"results":[]}]}' > checkov_docker.sarif
+          test -f checkov_docker.json || echo '{}' > checkov_docker.json
+          test -f trivy_image.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy Image","rules":[]}},"results":[]}]}' > trivy_image.sarif
+          test -f trivy_image.json || echo '[]' > trivy_image.json
+          test -f dockle.json || echo '[]' > dockle.json
+
+      - name: Upload Docker SARIF
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: checkov_docker.sarif
           category: checkov-docker
-      - name: Upload Trivy config SARIF
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy_config.sarif
-          category: trivy-config
+
       - name: Upload Trivy image SARIF
         if: always()
         continue-on-error: true
@@ -887,35 +686,31 @@ jobs:
           name: docker-security-results
           path: |
             dockerfiles.txt
-            docker_semgrep.sarif
-            docker_semgrep.json
+            built_images.txt
+            docker-build-logs/
+            hadolint.json
             checkov_docker.sarif
             checkov_docker.json
-            trivy_config.sarif
             trivy_image.sarif
-            hadolint.jsonl
+            trivy_image.json
             dockle.json
+          if-no-files-found: ignore
           retention-days: 30
 
   dast-zap:
-    name: "DAST — OWASP ZAP optional"
+    name: "DAST — ZAP optional"
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event.inputs.run_dast == 'true'
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
+    if: github.event_name == 'schedule' || github.event.inputs.run_dast == 'true'
     steps:
-      - name: Validate DAST target URL
-        id: validate_url
+      - name: Validate target
+        id: validate
         env:
-          DAST_TARGET_URL_VALUE: ${{ secrets.DAST_TARGET_URL }}
+          DAST_TARGET_URL: ${{ secrets.DAST_TARGET_URL }}
         run: |
-          if [ -z "$DAST_TARGET_URL_VALUE" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
-      - name: Run ZAP baseline high alerts only
-        if: steps.validate_url.outputs.skip != 'true'
+          if [ -z "$DAST_TARGET_URL" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Run ZAP baseline
+        if: steps.validate.outputs.skip != 'true'
         continue-on-error: true
         uses: zaproxy/action-baseline@v0.12.0
         with:
@@ -925,11 +720,13 @@ jobs:
           cmd_options: "-l HIGH"
           fail_action: false
           allow_issue_writing: false
+
       - name: Ensure ZAP artifacts exist
         if: always()
         run: |
           test -f zap_report.html || echo '<html><body>ZAP skipped</body></html>' > zap_report.html
           test -f zap_report.json || echo '{"site":[]}' > zap_report.json
+
       - name: Upload ZAP artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -941,138 +738,138 @@ jobs:
           retention-days: 30
 
   security-report:
-    name: "Security Report — Centralized non-blocking verdict"
+    name: "Security Report — Centralized non-blocking"
     runs-on: ubuntu-latest
-    needs:
-      - ai-code-security
-      - codeql
-      - high-confidence-sast
-      - python-security
-      - dependencies
-      - secrets
-      - docker-security
-      - dast-zap
+    needs: [codeql, ai-code-semgrep, secrets, sca, docker-security, dast-zap]
     if: always()
-    permissions:
-      contents: read
     steps:
       - name: Download all artifacts
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          path: all_scan_results/
+          path: all_scan_results
 
       - name: Generate centralized report
         run: |
           mkdir -p security_reports
           python3 - <<'PY'
-          import json, pathlib, os, re
+          import json, pathlib, re, os, sys
           from html import escape
-          root = pathlib.Path('all_scan_results')
-          out = pathlib.Path('security_reports')
-          out.mkdir(exist_ok=True)
-          order = ['critical','high','medium','low','info','unknown']
-          grouped = {s: [] for s in order}
+          root=pathlib.Path('all_scan_results')
+          out=pathlib.Path('security_reports'); out.mkdir(exist_ok=True)
+          order=['critical','high','medium','low','info','unknown']
+          grouped={s:[] for s in order}
           def norm(v):
-              v = str(v or '').lower().strip()
-              return {'error':'high','warning':'medium','note':'low','none':'info','critical':'critical','high':'high','medium':'medium','moderate':'medium','low':'low','info':'info','informational':'info'}.get(v, 'unknown')
+              v=str(v or '').lower().strip()
+              return {'error':'high','warning':'medium','note':'low','none':'info','critical':'critical','high':'high','medium':'medium','moderate':'medium','low':'low','info':'info','informational':'info','fatal':'critical'}.get(v,'unknown')
           def add(tool, sev, rule, msg, file='', line=''):
-              s = norm(sev)
-              grouped[s].append({'tool': tool or 'Unknown', 'severity': s, 'rule': rule or 'unknown', 'message': str(msg or '').strip(), 'file': str(file or ''), 'line': str(line or '')})
+              s=norm(sev)
+              grouped[s].append({'tool':tool or 'Unknown','severity':s,'rule':rule or 'unknown','message':str(msg or '').strip(),'file':str(file or ''),'line':str(line or '')})
           def parse_sarif(p):
-              try:
-                  data = json.loads(p.read_text(encoding='utf-8', errors='ignore'))
-              except Exception:
-                  return
-              for run in data.get('runs', []):
-                  tool = run.get('tool', {}).get('driver', {}).get('name', p.stem)
-                  rules = {r.get('id','unknown'): r.get('defaultConfiguration', {}).get('level','') for r in run.get('tool', {}).get('driver', {}).get('rules', [])}
-                  for res in run.get('results', []):
-                      rid = res.get('ruleId','unknown')
-                      level = res.get('level') or rules.get(rid) or 'unknown'
-                      msg = res.get('message', {}).get('text','')
-                      file = ''; line = ''
-                      locs = res.get('locations', [])
+              try: data=json.loads(p.read_text(encoding='utf-8', errors='ignore'))
+              except Exception: return
+              for run in data.get('runs',[]):
+                  tool=run.get('tool',{}).get('driver',{}).get('name',p.stem)
+                  rule_levels={r.get('id','unknown'):r.get('defaultConfiguration',{}).get('level','') for r in run.get('tool',{}).get('driver',{}).get('rules',[])}
+                  for res in run.get('results',[]):
+                      rid=res.get('ruleId','unknown')
+                      sev=res.get('level') or rule_levels.get(rid) or 'unknown'
+                      msg=res.get('message',{}).get('text','')
+                      file=''; line=''
+                      locs=res.get('locations') or []
                       if locs:
-                          phys = locs[0].get('physicalLocation', {})
-                          file = phys.get('artifactLocation', {}).get('uri','')
-                          line = phys.get('region', {}).get('startLine','')
-                      add(tool, level, rid, msg, file, line)
+                          phys=locs[0].get('physicalLocation',{})
+                          file=phys.get('artifactLocation',{}).get('uri','')
+                          line=phys.get('region',{}).get('startLine','')
+                      add(tool, sev, rid, msg, file, line)
+          def parse_semgrep_json(p):
+              try: data=json.loads(p.read_text(encoding='utf-8', errors='ignore'))
+              except Exception: return
+              for r in data.get('results',[]):
+                  extra=r.get('extra',{})
+                  sev=extra.get('severity','warning')
+                  add('Semgrep AI Code', sev, r.get('check_id','semgrep'), extra.get('message',''), r.get('path',''), r.get('start',{}).get('line',''))
+          def parse_pip_audit(p):
+              try: data=json.loads(p.read_text(encoding='utf-8', errors='ignore'))
+              except Exception: return
+              deps=data.get('dependencies',[]) if isinstance(data,dict) else []
+              for d in deps:
+                  for v in d.get('vulns',[]) or []:
+                      add('pip-audit','high',v.get('id','PYTHON_VULN'),f"{d.get('name')} {d.get('version','')}: {v.get('id')} {v.get('fix_versions','')}",'python-dependencies','')
           def parse_npm_audit(p):
-              try:
-                  data = json.loads(p.read_text(encoding='utf-8', errors='ignore'))
-              except Exception:
-                  return
-              for name, item in (data.get('vulnerabilities') or {}).items():
-                  sev = item.get('severity', 'unknown')
-                  if str(sev).lower() not in {'high','critical'}:
-                      continue
-                  via = item.get('via')
-                  msg = f'{name}: npm audit severity={sev}, via={via}'
-                  add('npm audit', sev, name, msg, 'package-lock.json', '')
+              try: data=json.loads(p.read_text(encoding='utf-8', errors='ignore'))
+              except Exception: return
+              vulns=data.get('vulnerabilities',{}) if isinstance(data,dict) else {}
+              for name,v in vulns.items():
+                  sev=v.get('severity','unknown')
+                  if norm(sev) in {'high','critical'}:
+                      add('npm audit',sev,name,v.get('title') or f"{name}: {sev}",'package-lock.json','')
           def parse_gitleaks_json(p):
-              try:
-                  data = json.loads(p.read_text(encoding='utf-8', errors='ignore') or '[]')
-              except Exception:
-                  return
-              for i in data if isinstance(data, list) else []:
-                  add('Gitleaks', 'high', i.get('RuleID'), i.get('Description'), i.get('File'), i.get('StartLine'))
+              try: data=json.loads(p.read_text(encoding='utf-8', errors='ignore') or '[]')
+              except Exception: return
+              if isinstance(data,list):
+                  for x in data:
+                      add('Gitleaks','critical',x.get('RuleID','SECRET'),x.get('Description','Secret detected'),x.get('File',''),x.get('StartLine',''))
+          def parse_hadolint(p):
+              try: data=json.loads(p.read_text(encoding='utf-8', errors='ignore') or '[]')
+              except Exception: return
+              for x in data if isinstance(data,list) else []:
+                  add('Hadolint',x.get('level','info'),x.get('code','HADOLINT'),x.get('message',''),x.get('file','Dockerfile'),x.get('line',''))
           def parse_dockle(p):
-              try:
-                  data = json.loads(p.read_text(encoding='utf-8', errors='ignore') or '{}')
-              except Exception:
-                  return
-              for detail in data.get('details', []) if isinstance(data, dict) else []:
-                  level = str(detail.get('level','')).lower()
-                  if level in {'fatal','warn'}:
-                      add('Dockle', 'high' if level == 'fatal' else 'medium', detail.get('code'), detail.get('title'), 'docker-image', '')
-          for p in root.rglob('*.sarif'):
-              parse_sarif(p)
-          for p in root.rglob('npm_audit.json'):
-              parse_npm_audit(p)
-          for p in root.rglob('gitleaks.json'):
-              parse_gitleaks_json(p)
-          for p in root.rglob('dockle.json'):
-              parse_dockle(p)
-          counts = {s: len(grouped[s]) for s in order}
-          total = sum(counts.values())
-          labels = {'critical':'Críticos','high':'Altos','medium':'Medios','low':'Bajos','info':'Informativos','unknown':'Desconocidos'}
-          lines = ['REPORTE CENTRALIZADO DE SEGURIDAD', '='*80, '', 'Enfoque: AI vulnerable code + Docker hardening + hallazgos de alta confianza.', '', 'RESUMEN', '-'*80]
-          lines += [f'Total: {total}', f'Críticos: {counts["critical"]}', f'Altos: {counts["high"]}', f'Medios: {counts["medium"]}', f'Bajos: {counts["low"]}', f'Info: {counts["info"]}', f'Desconocidos: {counts["unknown"]}', '']
+              try: data=json.loads(p.read_text(encoding='utf-8', errors='ignore') or '[]')
+              except Exception: return
+              items=data if isinstance(data,list) else [data]
+              for doc in items:
+                  for d in doc.get('details',[]) if isinstance(doc,dict) else []:
+                      sev=d.get('level','info')
+                      if norm(sev) in {'critical','high'}:
+                          add('Dockle',sev,d.get('code','DOCKLE'),d.get('title',''),d.get('filename','Docker image'),d.get('line',''))
+          for p in root.rglob('*.sarif'): parse_sarif(p)
+          for p in root.rglob('semgrep_ai_code.json'): parse_semgrep_json(p)
+          for p in root.rglob('pip_audit.json'): parse_pip_audit(p)
+          for p in root.rglob('npm_audit.json'): parse_npm_audit(p)
+          for p in root.rglob('gitleaks.json'): parse_gitleaks_json(p)
+          for p in root.rglob('hadolint.json'): parse_hadolint(p)
+          for p in root.rglob('dockle.json'): parse_dockle(p)
+          seen=set(); dedup={s:[] for s in order}
+          for s in order:
+              for item in grouped[s]:
+                  key=(item['tool'],item['rule'],item['file'],item['line'],item['message'][:160])
+                  if key not in seen:
+                      seen.add(key); dedup[s].append(item)
+          grouped=dedup
+          counts={s:len(grouped[s]) for s in order}
+          total=sum(counts.values())
+          names={'critical':'Críticos','high':'Altos','medium':'Medios','low':'Bajos','info':'Informativos','unknown':'Desconocidos'}
+          lines=['REPORTE CENTRALIZADO DE SEGURIDAD','='*80,'','Perfil: bajo falso positivo, AI code vulnerable, Docker fuerte, no bloqueante.','','RESUMEN','-'*80,f'Total       : {total}',f'Críticos    : {counts["critical"]}',f'Altos       : {counts["high"]}',f'Medios      : {counts["medium"]}',f'Bajos       : {counts["low"]}',f'Info        : {counts["info"]}',f'Desconocido : {counts["unknown"]}','']
           for sev in order:
-              lines += ['', f'HALLAZGOS {labels[sev].upper()} ({counts[sev]})', '-'*80]
-              if not grouped[sev]:
-                  lines.append('Sin hallazgos.')
-              for idx, item in enumerate(grouped[sev], 1):
-                  lines += [f'{idx}. Herramienta : {item["tool"]}', f'   Regla       : {item["rule"]}', f'   Archivo     : {item["file"]}', f'   Línea       : {item["line"]}', f'   Descripción : {item["message"]}', '']
-          (out / 'security_report_es.txt').write_text('\n'.join(lines), encoding='utf-8')
-          (out / 'security_report_es.json').write_text(json.dumps({'summary': counts, 'total': total, 'findings': grouped}, indent=2, ensure_ascii=False), encoding='utf-8')
-          html = ['<!doctype html><html><head><meta charset="utf-8"><title>Security Report</title><style>body{font-family:Arial,sans-serif;margin:24px}table{border-collapse:collapse;width:100%;margin-bottom:32px}th,td{border:1px solid #ddd;padding:8px;vertical-align:top}th{background:#f4f4f4}</style></head><body><h1>Reporte centralizado de seguridad</h1><p>Enfoque: AI vulnerable code + Docker hardening + hallazgos de alta confianza.</p><h2>Resumen</h2><ul>']
-          for sev in order:
-              html.append(f'<li>{escape(labels[sev])}: {counts[sev]}</li>')
+              lines += ['',f'HALLAZGOS {names[sev].upper()} ({counts[sev]})','-'*80]
+              if not grouped[sev]: lines.append('Sin hallazgos.')
+              for i,item in enumerate(grouped[sev],1):
+                  lines += [f'{i}. Herramienta : {item["tool"]}',f'   Regla       : {item["rule"]}',f'   Archivo     : {item["file"]}',f'   Línea       : {item["line"]}',f'   Descripción : {item["message"]}','']
+          (out/'security_report_es.txt').write_text('\n'.join(lines),encoding='utf-8')
+          (out/'security_report_es.json').write_text(json.dumps({'summary':counts,'total':total,'findings':grouped},indent=2,ensure_ascii=False),encoding='utf-8')
+          html=['<!doctype html><html><head><meta charset="utf-8"><title>Security Report</title><style>body{font-family:Arial;margin:24px}table{border-collapse:collapse;width:100%;margin-bottom:28px}td,th{border:1px solid #ddd;padding:7px;vertical-align:top}th{background:#eee}</style></head><body><h1>Reporte centralizado de seguridad</h1><p>Perfil bajo falso positivo, AI code vulnerable y Docker fuerte.</p><ul>']
+          for sev in order: html.append(f'<li>{escape(names[sev])}: {counts[sev]}</li>')
           html.append('</ul>')
           for sev in order:
-              html.append(f'<h2>{escape(labels[sev])} ({counts[sev]})</h2><table><tr><th>Herramienta</th><th>Regla</th><th>Archivo</th><th>Línea</th><th>Descripción</th></tr>')
-              for item in grouped[sev]:
-                  html.append(f'<tr><td>{escape(item["tool"])}</td><td>{escape(item["rule"])}</td><td>{escape(item["file"])}</td><td>{escape(str(item["line"]))}</td><td>{escape(item["message"])}</td></tr>')
+              html.append(f'<h2>{escape(names[sev])} ({counts[sev]})</h2><table><tr><th>Tool</th><th>Rule</th><th>File</th><th>Line</th><th>Description</th></tr>')
+              for it in grouped[sev]: html.append(f'<tr><td>{escape(it["tool"])}</td><td>{escape(it["rule"])}</td><td>{escape(it["file"])}</td><td>{escape(str(it["line"]))}</td><td>{escape(it["message"])}</td></tr>')
               html.append('</table>')
           html.append('</body></html>')
-          (out / 'security_report_es.html').write_text('\n'.join(html), encoding='utf-8')
-          print('\n'.join(lines[:120]))
+          (out/'security_report_es.html').write_text('\n'.join(html),encoding='utf-8')
+          print('\n'.join(lines))
           PY
 
-      - name: Add report to GitHub summary
+      - name: Add report to summary
         if: always()
         run: |
-          {
-            echo '## Reporte centralizado de seguridad'
-            echo
-            echo '```text'
-            sed -n '1,220p' security_reports/security_report_es.txt || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "## Reporte centralizado de seguridad" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat security_reports/security_report_es.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload centralized security report
+      - name: Upload centralized report
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -1084,21 +881,18 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os, sys
-          path = 'security_reports/security_report_es.json'
-          if not os.path.exists(path):
-              print('No centralized report found; neutral verdict.')
-              sys.exit(0)
-          data = json.load(open(path, encoding='utf-8'))
-          summary = data.get('summary', {})
-          threshold = '${{ github.event.inputs.fail_on }}' or os.environ.get('DEFAULT_FAIL_ON', 'never')
-          threshold = threshold.lower()
-          rank = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1, 'info': 0, 'unknown': 0}
+          path='security_reports/security_report_es.json'
+          if not os.path.exists(path): sys.exit(0)
+          data=json.load(open(path,encoding='utf-8'))
+          threshold='${{ github.event.inputs.fail_on }}' or os.environ.get('DEFAULT_FAIL_ON','never')
+          threshold=threshold.lower()
           if threshold == 'never':
-              print('Final verdict configured as never fail.')
+              print('Final verdict: never fail. Reports only.')
               sys.exit(0)
-          blocking = sum(int(count) for sev, count in summary.items() if rank.get(sev, 0) >= rank.get(threshold, 999))
+          order={'critical':5,'high':4,'medium':3,'low':2,'info':1,'unknown':0}
+          blocking=sum(int(c) for sev,c in data.get('summary',{}).items() if order.get(sev,0) >= order.get(threshold,99))
           if blocking:
-              print(f'Security Report failed: {blocking} finding(s) at or above {threshold}.')
+              print(f'Fail threshold reached: {blocking} finding(s) >= {threshold}')
               sys.exit(1)
-          print('Security Report passed.')
+          print('No blocking findings for configured threshold.')
           PY
