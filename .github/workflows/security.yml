@@ -39,7 +39,7 @@ jobs:
       - name: Check dependency pinning and resolvable versions
         continue-on-error: true
         run: |
-          python3 - <<'PY'
+          cat > https://urldefense.com/v3/__http://dependency_policy_scan.py__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV4s9x5aGw$  <<'PY'
           import json
           import pathlib
           import re
@@ -75,30 +75,26 @@ jobs:
           for req in req_files:
               if skip(req):
                   continue
-
               for lineno, raw in enumerate(req.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
                   line = raw.strip()
                   if skip_req.match(line):
                       continue
-
                   clean = line.split(" #", 1)[0].strip()
                   exact = exact_req.match(clean)
-
                   if not exact:
                       parsed = any_pkg.match(clean)
                       if parsed:
                           operator = parsed.group(3)
                           version = parsed.group(4)
                           if not operator or not version:
-                              add("MEDIUM", "PYTHON_DEPENDENCY_WITHOUT_VERSION", req, lineno, f"Dependencia Python sin version declarada: {line}")
+                              add("MEDIUM", "PYTHON_DEPENDENCY_WITHOUT_VERSION", req, lineno, "Dependencia Python sin version declarada: " + line)
                           elif operator != "==":
-                              add("MEDIUM", "PYTHON_DEPENDENCY_NOT_EXACT_PIN", req, lineno, f"Dependencia Python sin pin exacto ==: {line}", "hygiene")
+                              add("MEDIUM", "PYTHON_DEPENDENCY_NOT_EXACT_PIN", req, lineno, "Dependencia Python sin pin exacto ==: " + line, "hygiene")
                           else:
-                              add("MEDIUM", "PYTHON_DEPENDENCY_INVALID_FORMAT", req, lineno, f"Dependencia Python con formato no validable: {line}", "hygiene")
+                              add("MEDIUM", "PYTHON_DEPENDENCY_INVALID_FORMAT", req, lineno, "Dependencia Python con formato no validable: " + line, "hygiene")
                       else:
-                          add("MEDIUM", "PYTHON_DEPENDENCY_INVALID_FORMAT", req, lineno, f"Linea de dependencia Python no validable: {line}", "hygiene")
+                          add("MEDIUM", "PYTHON_DEPENDENCY_INVALID_FORMAT", req, lineno, "Linea de dependencia Python no validable: " + line, "hygiene")
                       continue
-
                   pinned_python.append((exact.group(1), exact.group(3), req, lineno, clean))
 
           for name, version, req, lineno, clean in pinned_python:
@@ -107,30 +103,27 @@ jobs:
                   try:
                       proc = subprocess.run(cmd, text=True, capture_output=True, timeout=90)
                   except subprocess.TimeoutExpired:
-                      add("INFO", "PYTHON_VERSION_VALIDATION_TIMEOUT", req, lineno, f"Timeout validando version Python: {clean}", "hygiene")
+                      add("INFO", "PYTHON_VERSION_VALIDATION_TIMEOUT", req, lineno, "Timeout validando version Python: " + clean, "hygiene")
                       continue
-
                   output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).lower()
                   if proc.returncode == 0:
                       continue
                   if "no matching distribution found" in output or "could not find a version" in output:
-                      add("HIGH", "PYTHON_PACKAGE_OR_VERSION_NOT_RESOLVABLE", req, lineno, f"Paquete o version Python no existe/no es resoluble: {clean}")
+                      add("HIGH", "PYTHON_PACKAGE_OR_VERSION_NOT_RESOLVABLE", req, lineno, "Paquete o version Python no existe/no es resoluble: " + clean)
                   elif any(x in output for x in ["temporary failure", "connection", "timed out", "proxy", "ssl", "network"]):
-                      add("INFO", "PYTHON_VERSION_VALIDATION_NETWORK_UNAVAILABLE", req, lineno, f"No se pudo validar por red/proxy/SSL: {clean}", "hygiene")
+                      add("INFO", "PYTHON_VERSION_VALIDATION_NETWORK_UNAVAILABLE", req, lineno, "No se pudo validar por red/proxy/SSL: " + clean, "hygiene")
                   else:
-                      add("INFO", "PYTHON_VERSION_VALIDATION_INCONCLUSIVE", req, lineno, f"Validacion inconclusa de version Python: {clean}", "hygiene")
+                      add("INFO", "PYTHON_VERSION_VALIDATION_INCONCLUSIVE", req, lineno, "Validacion inconclusa de version Python: " + clean, "hygiene")
 
           exact_npm = re.compile(r"^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$")
 
           for package_json in sorted(pathlib.Path(".").glob("**/package.json")):
               if skip(package_json):
                   continue
-
               try:
                   pkg = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
               except Exception:
                   continue
-
               for section in ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]:
                   deps = pkg.get(section, {})
                   if not isinstance(deps, dict):
@@ -149,8 +142,8 @@ jobs:
                               output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).lower()
                               if proc.returncode != 0 and ("notarget" in output or "no matching version found" in output or "404" in output):
                                   add("HIGH", "NPM_PACKAGE_OR_VERSION_NOT_RESOLVABLE", package_json, 1, f"Paquete o version npm no existe/no es resoluble: {dep_name}@{version}")
-                          except Exception as e:
-                              add("INFO", "NPM_VERSION_VALIDATION_INCONCLUSIVE", package_json, 1, f"No se pudo validar npm {dep_name}@{version}: {e}", "hygiene")
+                          except Exception as error:
+                              add("INFO", "NPM_VERSION_VALIDATION_INCONCLUSIVE", package_json, 1, f"No se pudo validar npm {dep_name}@{version}: {error}", "hygiene")
 
           pathlib.Path("dependency_policy_findings.json").write_text(json.dumps({"tool": "Dependency Policy", "findings": findings}, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -186,6 +179,7 @@ jobs:
           pathlib.Path("dependency_policy.sarif").write_text(json.dumps(sarif, indent=2, ensure_ascii=False), encoding="utf-8")
           print(f"Dependency policy findings: {len(findings)}")
           PY
+          python3 https://urldefense.com/v3/__http://dependency_policy_scan.py__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV4s9x5aGw$ 
 
       - name: Ensure dependency artifacts exist
         if: always()
@@ -196,7 +190,7 @@ jobs:
       - name: Upload dependency SARIF
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: dependency_policy.sarif
           category: dependency-policy
@@ -222,7 +216,7 @@ jobs:
       - name: Run precise AI/AppSec analyzer
         continue-on-error: true
         run: |
-          python3 - <<'PY'
+          cat > https://urldefense.com/v3/__http://ai_app_static_scan.py__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV782ltVYw$  <<'PY'
           import ast
           import json
           import pathlib
@@ -254,10 +248,10 @@ jobs:
               return ""
 
           def call_name(node):
-              if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkxQS5QxA$ ):
+              if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6g0NScmg$ ):
                   return call_name(node.func)
-              if isinstance(node, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFmNnCpaMA$ ):
-                  return https://urldefense.com/v3/__http://node.id__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFn18R1xtQ$ 
+              if isinstance(node, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV42sm3I6Q$ ):
+                  return https://urldefense.com/v3/__http://node.id__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV4ccHdvpw$ 
               if isinstance(node, ast.Attribute):
                   base = call_name(node.value)
                   return f"{base}.{node.attr}" if base else node.attr
@@ -283,53 +277,17 @@ jobs:
                       values.append(value.lower())
               return " ".join(values)
 
-          def names_in(node):
-              return {https://urldefense.com/v3/__http://child.id__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkkg4W3YA$  for child in ast.walk(node) if isinstance(child, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFmNnCpaMA$ )}
-
           def is_route_decorator(dec):
-              return isinstance(dec, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkxQS5QxA$ ) and ".route" in call_name(dec)
+              return isinstance(dec, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6g0NScmg$ ) and ".route" in call_name(dec)
 
-          def get_function_routes(tree):
-              routes = {}
-              for node in ast.walk(tree):
-                  if isinstance(node, ast.FunctionDef) and any(is_route_decorator(d) for d in node.decorator_list):
-                      routes[https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFnj2nmyUA$ ] = node
-              return routes
-
-          def function_calls(node):
-              out = []
-              for child in ast.walk(node):
-                  if isinstance(child, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkxQS5QxA$ ):
-                      out.append((call_name(child), child))
-              return out
-
-          def build_call_graph(functions):
-              graph = {k: set() for k in functions}
-              for fname, fnode in functions.items():
-                  for cname, _ in function_calls(fnode):
-                      if cname in functions:
-                          graph[fname].add(cname)
-              return graph
-
-          def reachable_from(routes, graph):
-              seen = set(routes)
-              stack = list(routes)
-              while stack:
-                  x = stack.pop()
-                  for y in graph.get(x, set()):
-                      if y not in seen:
-                          seen.add(y)
-                          stack.append(y)
-              return seen
-
-          def is_none_guarded(text, var):
+          def is_none_guarded(prefix, var):
               patterns = [
                   rf"{re.escape(var)}\s+is\s+None",
                   rf"not\s+{re.escape(var)}\b",
                   rf"{re.escape(var)}\s*==\s*None",
                   rf"{re.escape(var)}\s*!=\s*None",
               ]
-              return any(re.search(p, text) for p in patterns)
+              return any(re.search(pattern, prefix) for pattern in patterns)
 
           def analyze_python(py):
               text = py.read_text(encoding="utf-8", errors="ignore")
@@ -340,39 +298,36 @@ jobs:
                   add(py, error.lineno or 1, "MEDIUM", "PYTHON_SYNTAX_ERROR", "CÃ³digo aplicativo", f"SyntaxError impide analizar el archivo: {error}", "")
                   return
 
-              functions = {https://urldefense.com/v3/__http://n.name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFlelGEcGg$ : n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-              routes = get_function_routes(tree)
-              graph = build_call_graph(functions)
-              reachable = reachable_from(routes, graph)
-              whole_lower = text.lower()
+              routes = {}
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.FunctionDef) and any(is_route_decorator(dec) for dec in node.decorator_list):
+                      routes[https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6rSxBrZg$ ] = node
 
-              has_ai = any(x in text for x in [
-                  "RetrievalQA", "FAISS", "PyPDFLoader", "OpenAI", "ChatOpenAI", "LlamaIndex",
-                  "llama_index", "CrewAI", "autogen", "Haystack", "Chroma", "Pinecone",
-                  "OpenAIEmbeddings", "AgentExecutor", "create_openai_functions_agent"
+              whole = text.lower()
+              has_ai = any(token in text for token in [
+                  "RetrievalQA", "FAISS", "PyPDFLoader", "OpenAI", "ChatOpenAI",
+                  "LlamaIndex", "llama_index", "CrewAI", "autogen", "Haystack",
+                  "Chroma", "Pinecone", "OpenAIEmbeddings", "AgentExecutor"
               ])
-              has_request = any(x in text for x in ["request.args", "request.form", "request.json", "request.get_json"])
+              has_request = any(token in text for token in ["request.args", "request.form", "request.json", "request.get_json"])
               has_route = bool(routes)
 
               if has_route and has_request and has_ai:
                   add(py, 1, "HIGH", "AI_FLASK_RAG_ATTACK_SURFACE", "AI / LLM / Agentic", "Superficie AI/RAG expuesta por Flask: rutas HTTP + input de usuario + LLM/RAG en el mismo archivo. Revisar prompt injection, auth, rate limiting, aislamiento de datos y costos.", "", "HIGH")
 
-              # Variables de request y defaults.
               request_vars = {}
               for node in ast.walk(tree):
                   if isinstance(node, ast.Assign):
                       rhs = ast.unparse(node.value) if hasattr(ast, "unparse") else ""
-                      if any(x in rhs for x in ["request.args.get", "request.form.get", "request.values.get", "request.get_json", "request.json"]):
-                          for t in node.targets:
-                              if isinstance(t, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFmNnCpaMA$ ):
-                                  has_default = False
-                                  if isinstance(node.value, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkxQS5QxA$ ) and len(node.value.args) >= 2:
-                                      has_default = True
-                                  if isinstance(node.value, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkxQS5QxA$ ):
+                      if any(token in rhs for token in ["request.args.get", "request.form.get", "request.values.get", "request.get_json", "request.json"]):
+                          for target in node.targets:
+                              if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV42sm3I6Q$ ):
+                                  has_default = isinstance(node.value, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6g0NScmg$ ) and len(node.value.args) >= 2
+                                  if isinstance(node.value, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6g0NScmg$ ):
                                       for kw in node.value.keywords:
                                           if kw.arg == "default":
                                               has_default = True
-                                  request_vars[https://urldefense.com/v3/__http://t.id__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFlP_hbh2A$ ] = {"line": node.lineno, "default": has_default}
+                                  request_vars[https://urldefense.com/v3/__http://target.id__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV4IDH0H_w$ ] = {"line": node.lineno, "default": has_default}
 
               for var, meta in request_vars.items():
                   add(py, meta["line"], "INFO", "WEB_REQUEST_INPUT_ENTRYPOINT", "CÃ³digo aplicativo", f"Entrada controlada por usuario asignada a '{var}'.", line_text(lines, meta["line"]), "HIGH")
@@ -382,14 +337,14 @@ jobs:
                   src = line_text(lines, line)
 
                   if isinstance(node, ast.FunctionDef):
-                      if https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFnj2nmyUA$  in routes:
-                          add(py, line, "INFO", "WEB_FLASK_ROUTE_AUTH_REVIEW", "CÃ³digo aplicativo", f"Ruta Flask detectada en {https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFnj2nmyUA$ }(). Confirmar autenticaciÃ³n/autorizaciÃ³n si expone datos o acciones.", src, "MEDIUM", "Puede ser falso positivo si la ruta es pÃºblica por diseÃ±o.")
+                      if https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6rSxBrZg$  in routes:
+                          add(py, line, "INFO", "WEB_FLASK_ROUTE_AUTH_REVIEW", "CÃ³digo aplicativo", f"Ruta Flask detectada en {https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6rSxBrZg$ }(). Confirmar autenticaciÃ³n/autorizaciÃ³n si expone datos o acciones.", src, "MEDIUM", "Puede ser falso positivo si la ruta es pÃºblica por diseÃ±o.")
 
                   if isinstance(node, ast.Assign):
                       for target in node.targets:
-                          if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFmNnCpaMA$ ) and "sensitive" in target.id.lower() and isinstance(node.value, (ast.List, ast.Tuple)):
-                              words = [str(getattr(x, "value", "")).lower() for x in node.value.elts if isinstance(x, ast.Constant)]
-                              if any(w in {"secret", "secrets", "password", "passwords", "credential", "credentials", "key", "keys", "token"} for w in words):
+                          if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV42sm3I6Q$ ) and "sensitive" in target.id.lower() and isinstance(node.value, (ast.List, ast.Tuple)):
+                              words = [str(getattr(item, "value", "")).lower() for item in node.value.elts if isinstance(item, ast.Constant)]
+                              if any(word in {"secret", "secrets", "password", "passwords", "credential", "credentials", "key", "keys", "token"} for word in words):
                                   add(py, line, "MEDIUM", "AI_KEYWORD_BLACKLIST_SECURITY_CONTROL", "AI / LLM / Agentic", "Prompt injection / bypass: blacklist de keywords sensibles usada como control de seguridad. Es evadible con encoding, separaciÃ³n de caracteres, idioma o reformulaciÃ³n.", src, "HIGH")
 
                       for target in node.targets:
@@ -400,16 +355,16 @@ jobs:
                   if isinstance(node, ast.If):
                       cond_src = src.lower()
                       literals = literal_text(node.test)
-                      if ("forget" in literals and "rules" in literals) or ("new" in literals and "operator" in literals) or (("forget" in cond_src and "rules" in cond_src) or ("new" in cond_src and "operator" in cond_src)):
+                      if ("forget" in literals and "rules" in literals) or ("new" in literals and "operator" in literals) or ("forget" in cond_src and "rules" in cond_src) or ("new" in cond_src and "operator" in cond_src):
                           add(py, line, "HIGH", "AI_PROMPT_TRIGGERED_SECURITY_FLAG_BYPASS", "AI / LLM / Agentic", "Prompt injection/backdoor: condiciÃ³n textual permite activar comportamiento sensible o cambiar flags de seguridad.", src, "HIGH")
 
-                      if "os.environ" in cond_src and "yes" in cond_src and any(x in cond_src for x in ["secret", "owner", "reveal", "token", "key"]):
+                      if "os.environ" in cond_src and "yes" in cond_src and any(token in cond_src for token in ["secret", "owner", "reveal", "token", "key"]):
                           add(py, line, "HIGH", "AI_ENV_FLAG_AUTHORIZATION_GATE", "AI / LLM / Agentic", "Gate de autorizaciÃ³n/divulgaciÃ³n sensible depende de os.environ y valor mutable. Riesgo de bypass de polÃ­tica.", src, "HIGH")
 
                       if "<script>" in cond_src:
                           add(py, line, "MEDIUM", "WEB_WEAK_XSS_BLACKLIST_SCRIPT_ONLY", "CÃ³digo aplicativo", "MitigaciÃ³n XSS dÃ©bil: solo bloquea literal '<script>'. No reemplaza sanitizaciÃ³n/encoding contextual.", src, "HIGH")
 
-                  if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkxQS5QxA$ ):
+                  if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6g0NScmg$ ):
                       cname = call_name(node)
 
                       if cname == "RetrievalQA.from_chain_type" or cname.endswith(".RetrievalQA.from_chain_type"):
@@ -434,17 +389,16 @@ jobs:
                       if cname.endswith(".run") or cname.endswith(".invoke") or cname.endswith(".predict") or cname.endswith(".generate") or cname.endswith(".complete"):
                           arg_names = []
                           for arg in node.args:
-                              if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFmNnCpaMA$ ):
-                                  arg_names.append(https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkPndFw0w$ )
+                              if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV42sm3I6Q$ ):
+                                  arg_names.append(https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6buwr_Rg$ )
                           for kw in node.keywords:
-                              if isinstance(kw.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFmNnCpaMA$ ):
-                                  arg_names.append(https://urldefense.com/v3/__http://kw.value.id__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFmCdb4WFw$ )
-                          if any(x in {"query", "user_query", "prompt", "msg", "message", "search_query", "input", "question"} for x in arg_names):
+                              if isinstance(kw.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV42sm3I6Q$ ):
+                                  arg_names.append(https://urldefense.com/v3/__http://kw.value.id__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6X8Lw1Ww$ )
+                          if any(name in {"query", "user_query", "prompt", "msg", "message", "search_query", "input", "question"} for name in arg_names):
                               add(py, line, "HIGH", "AI_USER_INPUT_TO_LLM_OR_RAG", "AI / LLM / Agentic", f"Prompt injection: variable potencialmente controlada por usuario llega a {cname}().", src, "HIGH")
 
-                      if cname in {"os.system", "os.popen", "https://urldefense.com/v3/__http://subprocess.run__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFmxdB3Xig$ ", "subprocess.Popen", "subprocess.check_output", "https://urldefense.com/v3/__http://subprocess.call__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkNvDTOsQ$ "}:
-                          full_call = src
-                          if "shell=True" in full_call:
+                      if cname in {"os.system", "os.popen", "https://urldefense.com/v3/__http://subprocess.run__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV4IOgblPQ$ ", "subprocess.Popen", "subprocess.check_output", "https://urldefense.com/v3/__http://subprocess.call__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV7DDHHgBQ$ "}:
+                          if "shell=True" in src:
                               add(py, line, "HIGH", "CODE_COMMAND_INJECTION_SHELL_TRUE", "CÃ³digo aplicativo", f"Comando con shell=True detectado en {cname}. Revisar si algÃºn argumento depende de input de usuario.", src, "HIGH")
 
                       if cname == "time.sleep":
@@ -452,21 +406,20 @@ jobs:
                           if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, (int, float)):
                               seconds = node.args[0].value
                           if seconds and seconds >= 30:
-                              sev = "MEDIUM" if has_route else "LOW"
-                              add(py, line, sev, "WEB_ROUTE_LONG_SLEEP_DOS", "CÃ³digo aplicativo", f"time.sleep({seconds}) detectado; si estÃ¡ en ruta HTTP bloquea workers y puede causar DoS.", src, "HIGH")
+                              severity = "MEDIUM" if has_route else "LOW"
+                              add(py, line, severity, "WEB_ROUTE_LONG_SLEEP_DOS", "CÃ³digo aplicativo", f"time.sleep({seconds}) detectado; si estÃ¡ en ruta HTTP bloquea workers y puede causar DoS.", src, "HIGH")
 
                       if cname.endswith(".lower"):
-                          if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFmNnCpaMA$ ):
-                              var = https://urldefense.com/v3/__http://node.func.value.id__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFm83GNjUQ$ 
-                              if var in request_vars and not request_vars[var]["default"] and not is_none_guarded(text[:text.find(src) if src in text else 0], var):
+                          if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV42sm3I6Q$ ):
+                              var = https://urldefense.com/v3/__http://node.func.value.id__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV7hawchzw$ 
+                              prefix = text[:text.find(src)] if src in text else ""
+                              if var in request_vars and not request_vars[var]["default"] and not is_none_guarded(prefix, var):
                                   add(py, line, "MEDIUM", "WEB_REQUEST_PARAM_NONE_DOS", "CÃ³digo aplicativo", f"ParÃ¡metro de request '{var}' usado con .lower() sin default/check visible de None; si falta el parÃ¡metro puede causar 500/DoS.", src, "HIGH")
 
-                  # Broad exception as INFO, not vuln
                   if isinstance(node, ast.ExceptHandler):
                       if node.type is None or call_name(node.type) in {"Exception", "BaseException"}:
                           add(py, line, "INFO", "CODE_BROAD_EXCEPTION_OBSERVABILITY", "CÃ³digo aplicativo", "Manejo amplio de excepciones. No es vulnerabilidad directa; puede ocultar errores de seguridad y dificultar trazabilidad.", src, "MEDIUM", "No contabilizar como vulnerabilidad explotable directa.")
 
-              # Regex backup.
               for idx, raw in enumerate(lines, 1):
                   line = raw.strip()
                   lower = line.lower()
@@ -483,7 +436,7 @@ jobs:
                   if "innerhtml" in lower or ".html(" in lower:
                       add(py, idx, "MEDIUM", "WEB_DOM_XSS_SINK_REVIEW", "CÃ³digo aplicativo", "Sink HTML/DOM detectado. Revisar si recibe datos del usuario o del LLM sin sanitizaciÃ³n.", line, "MEDIUM")
 
-                  if any(x in lower for x in ["dangerouslysetinnerhtml", "bypasssecuritytrusthtml"]):
+                  if any(token in lower for token in ["dangerouslysetinnerhtml", "bypasssecuritytrusthtml"]):
                       add(py, idx, "HIGH", "WEB_UNSAFE_HTML_RENDERING", "CÃ³digo aplicativo", "Renderizado HTML inseguro detectado. Revisar XSS con salida de usuario/LLM.", line, "HIGH")
 
               if has_route and has_ai:
@@ -496,8 +449,8 @@ jobs:
               text = path.read_text(encoding="utf-8", errors="ignore")
               lines = text.splitlines()
               joined = text.lower()
-              has_ai = any(x in joined for x in ["openai", "langchain", "llamaindex", "anthropic", "gemini", "chat.completions", "responses.create"])
-              has_request = any(x in joined for x in ["req.body", "req.query", "req.params", "request.body"])
+              has_ai = any(token in joined for token in ["openai", "langchain", "llamaindex", "anthropic", "gemini", "chat.completions", "responses.create"])
+              has_request = any(token in joined for token in ["req.body", "req.query", "req.params", "request.body"])
               if has_ai and has_request:
                   add(path, 1, "HIGH", "AI_JS_HTTP_INPUT_TO_LLM_SURFACE", "AI / LLM / Agentic", "Superficie AI expuesta: input HTTP y llamadas LLM en el mismo archivo. Revisar prompt injection, auth, rate limiting y tool abuse.", "", "HIGH")
               for idx, line in enumerate(lines, 1):
@@ -511,15 +464,17 @@ jobs:
                   if "sk-" in line and ("openai" in low or "api" in low or "key" in low):
                       add(path, idx, "HIGH", "AI_HARDCODED_API_KEY", "Secretos", "Posible API key hardcodeada en cÃ³digo JS/TS.", line.strip(), "HIGH")
 
-          for py in pathlib.Path(".").rglob("*.py"):
-              if not skip(py):
-                  analyze_python(py)
+          for py_file in pathlib.Path(".").rglob("*.py"):
+              if not skip(py_file):
+                  analyze_python(py_file)
 
-          for js in list(pathlib.Path(".").rglob("*.js")) + list(pathlib.Path(".").rglob("*.ts")) + list(pathlib.Path(".").rglob("*.jsx")) + list(pathlib.Path(".").rglob("*.tsx")):
-              if not skip(js):
-                  analyze_js(js)
+          js_files = []
+          for pattern in ["*.js", "*.ts", "*.jsx", "*.tsx"]:
+              js_files.extend(pathlib.Path(".").rglob(pattern))
+          for js_file in js_files:
+              if not skip(js_file):
+                  analyze_js(js_file)
 
-          # deduplicate
           unique = {}
           for item in findings:
               key = (item["file"], item["line"], item["rule"], item["message"])
@@ -539,30 +494,30 @@ jobs:
                   return "warning"
               return "note"
 
-          for f in findings:
-              rid = f["rule"]
+          for finding in findings:
+              rid = finding["rule"]
               rules.setdefault(rid, {
                   "id": rid,
                   "name": rid,
                   "shortDescription": {"text": rid},
-                  "fullDescription": {"text": f["message"]},
-                  "defaultConfiguration": {"level": level(f["severity"])}
+                  "fullDescription": {"text": finding["message"]},
+                  "defaultConfiguration": {"level": level(finding["severity"])}
               })
               results.append({
                   "ruleId": rid,
-                  "level": level(f["severity"]),
-                  "message": {"text": f["message"]},
+                  "level": level(finding["severity"]),
+                  "message": {"text": finding["message"]},
                   "properties": {
                       "kind": "vulnerability",
-                      "category": f["category"],
-                      "snippet": f["snippet"],
-                      "confidence": f["confidence"],
-                      "false_positive_note": f.get("fp_note", "")
+                      "category": finding["category"],
+                      "snippet": finding["snippet"],
+                      "confidence": finding["confidence"],
+                      "false_positive_note": finding.get("fp_note", "")
                   },
                   "locations": [{
                       "physicalLocation": {
-                          "artifactLocation": {"uri": f["file"]},
-                          "region": {"startLine": f["line"]}
+                          "artifactLocation": {"uri": finding["file"]},
+                          "region": {"startLine": finding["line"]}
                       }
                   }]
               })
@@ -578,6 +533,7 @@ jobs:
           pathlib.Path("ai_app_static.sarif").write_text(json.dumps(sarif, indent=2, ensure_ascii=False), encoding="utf-8")
           print(f"AI/App static analyzer findings: {len(findings)}")
           PY
+          python3 https://urldefense.com/v3/__http://ai_app_static_scan.py__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV782ltVYw$ 
 
       - name: Ensure AI/App static artifacts exist
         if: always()
@@ -588,7 +544,7 @@ jobs:
       - name: Upload AI/App static SARIF
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: ai_app_static.sarif
           category: ai-app-static
@@ -640,7 +596,7 @@ jobs:
       - name: Upload Ruff dev-quality SARIF
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: ruff_dev_quality.sarif
           category: ruff-dev-quality
@@ -671,18 +627,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@v3
         continue-on-error: true
         with:
           languages: ${{ matrix.language }}
           queries: security-extended,security-and-quality
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
+        uses: github/codeql-action/autobuild@v3
         continue-on-error: true
 
       - name: Analyze and upload CodeQL SARIF
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@v3
         continue-on-error: true
         with:
           category: "/language:${{ matrix.language }}"
@@ -760,12 +716,12 @@ jobs:
             - id: web-python-flask-public-host
               languages: [python]
               severity: WARNING
-              message: "Flask app is exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkiwSa1vA$ . Confirm network controls, authentication and production WSGI deployment."
+              message: "Flask app is exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV7e0_JtKg$ . Confirm network controls, authentication and production WSGI deployment."
               pattern-either:
-                - pattern: app.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkiwSa1vA$ ", ...)
-                - pattern: app.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkiwSa1vA$ ", ...)
-                - pattern: $APP.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkiwSa1vA$ ", ...)
-                - pattern: $APP.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8rPL0wIHogRp3bSQzViJRpCIJS_UKNDypwmif-dt736If0c6Wuk8pOvLcYkOqCH0AxrcsDdFL5iLos4XRAajNFkiwSa1vA$ ", ...)
+                - pattern: app.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV7e0_JtKg$ ", ...)
+                - pattern: app.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV7e0_JtKg$ ", ...)
+                - pattern: $APP.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV7e0_JtKg$ ", ...)
+                - pattern: $APP.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV7e0_JtKg$ ", ...)
 
             - id: web-python-route-long-sleep-dos
               languages: [python]
@@ -828,7 +784,7 @@ jobs:
       - name: Upload Semgrep SARIF
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -999,7 +955,7 @@ jobs:
       - name: Upload AI SARIF
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep_ai.sarif
           category: ai-security-precise
@@ -1062,7 +1018,7 @@ jobs:
       - name: Upload pip-audit SARIF
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: pip_audit.sarif
           category: pip-audit
@@ -1070,7 +1026,7 @@ jobs:
       - name: Upload Trivy SARIF
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy_results.sarif
           category: trivy-sca
@@ -1112,7 +1068,7 @@ jobs:
       - name: Upload Gitleaks SARIF
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -1143,28 +1099,24 @@ jobs:
           dockerfiles="$(find . -type f \( -name 'Dockerfile' -o -name 'Dockerfile.*' \) -not -path './.git/*' -not -path './node_modules/*')"
           if [ -n "$dockerfiles" ]; then
             for file in $dockerfiles; do
-              docker run --rm -i hadolint/hadolint:latest hadolint --format json - < "$file" > hadolint_tmp.json || true
-              python3 - "$file" <<'PY'
-          import json, pathlib, sys
-          file = sys.argv[1]
-          out = pathlib.Path("hadolint_results.json")
-          try:
-              current = json.loads(out.read_text())
-          except Exception:
-              current = []
-          try:
-              data = json.loads(pathlib.Path("hadolint_tmp.json").read_text() or "[]")
-          except Exception:
-              data = []
-          if isinstance(data, dict):
-              data = [data]
-          for x in data:
-              if isinstance(x, dict):
-                  x["file"] = file
-                  current.append(x)
-          out.write_text(json.dumps(current, indent=2))
-          PY
+              docker run --rm -i hadolint/hadolint:latest hadolint --format json - < "$file" > "hadolint_$(basename "$file").json" || true
             done
+            python3 - <<'PY'
+          import json
+          import pathlib
+          current = []
+          for tmp in pathlib.Path(".").glob("hadolint_*.json"):
+              try:
+                  data = json.loads(tmp.read_text(encoding="utf-8", errors="ignore") or "[]")
+              except Exception:
+                  data = []
+              if isinstance(data, dict):
+                  data = [data]
+              for item in data:
+                  if isinstance(item, dict):
+                      current.append(item)
+          pathlib.Path("hadolint_results.json").write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+          PY
           fi
           echo "[]" > dockle_results.json
 
@@ -1212,7 +1164,7 @@ jobs:
       - name: Upload Checkov SARIF
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: checkov_results.sarif
           category: checkov-iac
@@ -1251,7 +1203,7 @@ jobs:
 
       - name: Build centralized report with every finding and tool status
         run: |
-          python3 - <<'PY'
+          cat > https://urldefense.com/v3/__http://build_report.py__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6LLbRVHg$  <<'PY'
           import json
           import pathlib
 
@@ -1262,9 +1214,9 @@ jobs:
           quality = []
           tool_status = []
 
-          def norm(s):
-              s = str(s or "UNKNOWN").upper()
-              return {"ERROR":"HIGH","WARNING":"MEDIUM","WARN":"MEDIUM","NOTE":"LOW","STYLE":"LOW"}.get(s, s)
+          def norm(sev):
+              sev = str(sev or "UNKNOWN").upper()
+              return {"ERROR": "HIGH", "WARNING": "MEDIUM", "WARN": "MEDIUM", "NOTE": "LOW", "STYLE": "LOW"}.get(sev, sev)
 
           def add(category, severity, tool, location, detail, rule="", source="", fp_note=""):
               findings.append({
@@ -1280,180 +1232,182 @@ jobs:
 
           def load_all(name):
               matched = False
-              for p in root.rglob(name):
+              for path in root.rglob(name):
                   matched = True
                   try:
-                      txt = p.read_text(encoding="utf-8", errors="ignore").strip()
-                      if txt:
-                          yield p, json.loads(txt)
-                  except Exception as e:
-                      add("Pipeline / Parser", "UNKNOWN", "Report parser", f"{p}:1", f"No se pudo leer JSON: {e}", "PARSER_ERROR", str(p))
+                      text = path.read_text(encoding="utf-8", errors="ignore").strip()
+                      if text:
+                          yield path, json.loads(text)
+                  except Exception as error:
+                      add("Pipeline / Parser", "UNKNOWN", "Report parser", f"{path}:1", f"No se pudo leer JSON: {error}", "PARSER_ERROR", str(path))
               if not matched:
                   tool_status.append({"artifact": name, "status": "missing"})
 
-          for p, data in load_all("ai_app_static_findings.json"):
+          for path, data in load_all("ai_app_static_findings.json"):
               count = 0
-              for x in data.get("findings", []):
+              for item in data.get("findings", []):
                   count += 1
-                  add(x.get("category","AI / LLM / Agentic"), x.get("severity","UNKNOWN"), x.get("tool","AI/App Static Analyzer"), f"{x.get('file','?')}:{x.get('line','?')}", x.get("message",""), x.get("rule",""), str(p), x.get("fp_note",""))
-              tool_status.append({"artifact": str(p), "tool": "AI/App Static Analyzer", "findings": count})
+                  add(item.get("category", "AI / LLM / Agentic"), item.get("severity", "UNKNOWN"), item.get("tool", "AI/App Static Analyzer"), f"{item.get('file','?')}:{item.get('line','?')}", item.get("message", ""), item.get("rule", ""), str(path), item.get("fp_note", ""))
+              tool_status.append({"artifact": str(path), "tool": "AI/App Static Analyzer", "findings": count})
 
-          for p, data in load_all("semgrep_ai.json"):
+          for path, data in load_all("semgrep_ai.json"):
               count = 0
-              for x in data.get("results", []):
+              for item in data.get("results", []):
                   count += 1
-                  e = x.get("extra", {})
-                  add("AI / LLM / Agentic", e.get("severity","UNKNOWN"), "Semgrep AI", f"{x.get('path','?')}:{x.get('start',{}).get('line','?')}", e.get("message",""), x.get("check_id",""), str(p))
-              tool_status.append({"artifact": str(p), "tool": "Semgrep AI", "findings": count})
+                  extra = item.get("extra", {})
+                  add("AI / LLM / Agentic", extra.get("severity", "UNKNOWN"), "Semgrep AI", f"{item.get('path','?')}:{item.get('start',{}).get('line','?')}", extra.get("message", ""), item.get("check_id", ""), str(path))
+              tool_status.append({"artifact": str(path), "tool": "Semgrep AI", "findings": count})
 
-          for p, data in load_all("semgrep.json"):
+          for path, data in load_all("semgrep.json"):
               count = 0
-              for x in data.get("results", []):
+              for item in data.get("results", []):
                   count += 1
-                  e = x.get("extra", {})
-                  add("CÃ³digo aplicativo", e.get("severity","UNKNOWN"), "Semgrep OSS", f"{x.get('path','?')}:{x.get('start',{}).get('line','?')}", e.get("message",""), x.get("check_id",""), str(p))
-              tool_status.append({"artifact": str(p), "tool": "Semgrep OSS", "findings": count})
+                  extra = item.get("extra", {})
+                  add("CÃ³digo aplicativo", extra.get("severity", "UNKNOWN"), "Semgrep OSS", f"{item.get('path','?')}:{item.get('start',{}).get('line','?')}", extra.get("message", ""), item.get("check_id", ""), str(path))
+              tool_status.append({"artifact": str(path), "tool": "Semgrep OSS", "findings": count})
 
-          for p, data in load_all("codeql_findings.json"):
+          for path, data in load_all("codeql_findings.json"):
               count = 0
-              for x in data.get("findings", []):
+              for item in data.get("findings", []):
                   count += 1
-                  add(x.get("category","CÃ³digo aplicativo"), x.get("severity","UNKNOWN"), x.get("tool","CodeQL"), x.get("location","?:?"), x.get("message",""), x.get("rule",""), str(p))
-              tool_status.append({"artifact": str(p), "tool": "CodeQL", "findings": count})
+                  add(item.get("category", "CÃ³digo aplicativo"), item.get("severity", "UNKNOWN"), item.get("tool", "CodeQL"), item.get("location", "?:?"), item.get("message", ""), item.get("rule", ""), str(path))
+              tool_status.append({"artifact": str(path), "tool": "CodeQL", "findings": count})
 
-          for p, data in load_all("dependency_policy_findings.json"):
+          for path, data in load_all("dependency_policy_findings.json"):
               count = 0
-              for x in data.get("findings", []):
+              for item in data.get("findings", []):
                   count += 1
-                  add(x.get("category","Dependencias / Policy"), x.get("severity","UNKNOWN"), "Dependency Policy", f"{x.get('file','?')}:{x.get('line','?')}", x.get("message",""), x.get("rule",""), str(p))
-              tool_status.append({"artifact": str(p), "tool": "Dependency Policy", "findings": count})
+                  add(item.get("category", "Dependencias / Policy"), item.get("severity", "UNKNOWN"), "Dependency Policy", f"{item.get('file','?')}:{item.get('line','?')}", item.get("message", ""), item.get("rule", ""), str(path))
+              tool_status.append({"artifact": str(path), "tool": "Dependency Policy", "findings": count})
 
-          for p, data in load_all("pip_audit_osv.json"):
+          for path, data in load_all("pip_audit_osv.json"):
               count = 0
               deps = data.get("dependencies", []) if isinstance(data, dict) else []
               for dep in deps:
-                  for v in dep.get("vulns", []) or []:
+                  for vuln in dep.get("vulns", []) or []:
                       count += 1
-                      add("Dependencias / SCA", v.get("severity","HIGH"), "pip-audit", f"{dep.get('name','?')}:?", f"{dep.get('name','?')} {dep.get('version','')}: {v.get('id','')} - {v.get('description','')}", v.get("id",""), str(p))
-              tool_status.append({"artifact": str(p), "tool": "pip-audit", "findings": count})
+                      add("Dependencias / SCA", vuln.get("severity", "HIGH"), "pip-audit", f"{dep.get('name','?')}:?", f"{dep.get('name','?')} {dep.get('version','')}: {vuln.get('id','')} - {vuln.get('description','')}", vuln.get("id", ""), str(path))
+              tool_status.append({"artifact": str(path), "tool": "pip-audit", "findings": count})
 
-          for p, data in load_all("trivy_results.json"):
+          for path, data in load_all("trivy_results.json"):
               count = 0
-              for r in data.get("Results", []) if isinstance(data, dict) else []:
-                  target = r.get("Target","?")
-                  for v in r.get("Vulnerabilities", []) or []:
+              for result in data.get("Results", []) if isinstance(data, dict) else []:
+                  target = result.get("Target", "?")
+                  for vuln in result.get("Vulnerabilities", []) or []:
                       count += 1
-                      add("Dependencias / SCA", v.get("Severity","UNKNOWN"), "Trivy", f"{target}:?", f"{v.get('PkgName','')} {v.get('InstalledVersion','')} - {v.get('VulnerabilityID','')} - {v.get('Title','')}", v.get("VulnerabilityID",""), str(p))
-                  for s in r.get("Secrets", []) or []:
+                      add("Dependencias / SCA", vuln.get("Severity", "UNKNOWN"), "Trivy", f"{target}:?", f"{vuln.get('PkgName','')} {vuln.get('InstalledVersion','')} - {vuln.get('VulnerabilityID','')} - {vuln.get('Title','')}", vuln.get("VulnerabilityID", ""), str(path))
+                  for secret in result.get("Secrets", []) or []:
                       count += 1
-                      add("Secretos", s.get("Severity","HIGH"), "Trivy", f"{target}:?", s.get("Title","Possible secret"), s.get("RuleID",""), str(p))
-                  for m in r.get("Misconfigurations", []) or []:
+                      add("Secretos", secret.get("Severity", "HIGH"), "Trivy", f"{target}:?", secret.get("Title", "Possible secret"), secret.get("RuleID", ""), str(path))
+                  for misconf in result.get("Misconfigurations", []) or []:
                       count += 1
-                      cat = "Docker / Contenedores" if "dockerfile" in str(target).lower() else "IaC / Cloud / Config"
-                      add(cat, m.get("Severity","UNKNOWN"), "Trivy", f"{target}:?", f"{m.get('ID','')} - {m.get('Title','')}", m.get("ID",""), str(p))
-              tool_status.append({"artifact": str(p), "tool": "Trivy", "findings": count})
+                      category = "Docker / Contenedores" if "dockerfile" in str(target).lower() else "IaC / Cloud / Config"
+                      add(category, misconf.get("Severity", "UNKNOWN"), "Trivy", f"{target}:?", f"{misconf.get('ID','')} - {misconf.get('Title','')}", misconf.get("ID", ""), str(path))
+              tool_status.append({"artifact": str(path), "tool": "Trivy", "findings": count})
 
-          for p, data in load_all("gitleaks_report.json"):
+          for path, data in load_all("gitleaks_report.json"):
               count = 0
               if isinstance(data, list):
-                  for x in data:
+                  for item in data:
                       count += 1
-                      add("Secretos", "HIGH", "Gitleaks", f"{x.get('File','?')}:{x.get('StartLine','?')}", x.get("Description","Possible exposed secret"), x.get("RuleID",""), str(p))
-              tool_status.append({"artifact": str(p), "tool": "Gitleaks", "findings": count})
+                      add("Secretos", "HIGH", "Gitleaks", f"{item.get('File','?')}:{item.get('StartLine','?')}", item.get("Description", "Possible exposed secret"), item.get("RuleID", ""), str(path))
+              tool_status.append({"artifact": str(path), "tool": "Gitleaks", "findings": count})
 
-          for p, data in load_all("checkov_results.json"):
+          for path, data in load_all("checkov_results.json"):
               count = 0
               reports = data if isinstance(data, list) else [data]
-              for rep in reports:
-                  if not isinstance(rep, dict):
+              for report in reports:
+                  if not isinstance(report, dict):
                       continue
-                  for c in rep.get("results", {}).get("failed_checks", []) or []:
+                  for check in report.get("results", {}).get("failed_checks", []) or []:
                       count += 1
-                      fp = c.get("file_path","?")
-                      cat = "Docker / Contenedores" if "dockerfile" in str(fp).lower() else "IaC / Cloud / Config"
-                      lr = c.get("file_line_range") or ["?"]
-                      add(cat, "HIGH", "Checkov", f"{fp}:{lr[0]}", c.get("check_name",""), c.get("check_id",""), str(p), "Muchos checks Checkov son hardening; validar contexto antes de tratarlos como vulnerabilidad explotable.")
-              tool_status.append({"artifact": str(p), "tool": "Checkov", "findings": count})
+                      file_path = check.get("file_path", "?")
+                      category = "Docker / Contenedores" if "dockerfile" in str(file_path).lower() else "IaC / Cloud / Config"
+                      line_range = check.get("file_line_range") or ["?"]
+                      add(category, "HIGH", "Checkov", f"{file_path}:{line_range[0]}", check.get("check_name", ""), check.get("check_id", ""), str(path), "Muchos checks Checkov son hardening; validar contexto antes de tratarlos como vulnerabilidad explotable.")
+              tool_status.append({"artifact": str(path), "tool": "Checkov", "findings": count})
 
-          for p, data in load_all("hadolint_results.json"):
+          for path, data in load_all("hadolint_results.json"):
               count = 0
               if isinstance(data, list):
-                  for x in data:
+                  for item in data:
                       count += 1
-                      add("Docker / Contenedores", x.get("level","warning"), "Hadolint", f"{x.get('file', x.get('filename','Dockerfile'))}:{x.get('line', x.get('lineNumber','?'))}", x.get("message", x.get("description","")), x.get("code",""), str(p), "Hadolint suele ser hardening/calidad Docker; priorizar segÃºn exposiciÃ³n.")
-              tool_status.append({"artifact": str(p), "tool": "Hadolint", "findings": count})
+                      add("Docker / Contenedores", item.get("level", "warning"), "Hadolint", f"{item.get('file', item.get('filename','Dockerfile'))}:{item.get('line', item.get('lineNumber','?'))}", item.get("message", item.get("description", "")), item.get("code", ""), str(path), "Hadolint suele ser hardening/calidad Docker; priorizar segÃºn exposiciÃ³n.")
+              tool_status.append({"artifact": str(path), "tool": "Hadolint", "findings": count})
 
-          for p, data in load_all("ruff_dev_quality_findings.json"):
+          for path, data in load_all("ruff_dev_quality_findings.json"):
               count = 0
-              for x in data.get("findings", []) if isinstance(data, dict) else []:
+              for item in data.get("findings", []) if isinstance(data, dict) else []:
                   count += 1
-                  quality.append(x)
-              tool_status.append({"artifact": str(p), "tool": "Ruff", "findings": count, "type": "quality"})
+                  quality.append(item)
+              tool_status.append({"artifact": str(path), "tool": "Ruff", "findings": count, "type": "quality"})
 
-          categories = sorted(set([f["category"] for f in findings]) | {"AI / LLM / Agentic","CÃ³digo aplicativo","Dependencias / SCA","Dependencias / Policy","Secretos","Docker / Contenedores","IaC / Cloud / Config","Pipeline / Parser"})
-          severities = ["CRITICAL","HIGH","MEDIUM","LOW","INFO","UNKNOWN"]
-          table = {c:{s:0 for s in severities} for c in categories}
-          for f in findings:
-              sev = f["severity"] if f["severity"] in severities else "UNKNOWN"
-              table[f["category"]][sev] += 1
+          categories = sorted(set([item["category"] for item in findings]) | {"AI / LLM / Agentic", "CÃ³digo aplicativo", "Dependencias / SCA", "Dependencias / Policy", "Secretos", "Docker / Contenedores", "IaC / Cloud / Config", "Pipeline / Parser"})
+          severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"]
+          table = {category: {severity: 0 for severity in severities} for category in categories}
 
-          order = {"CRITICAL":0,"HIGH":1,"MEDIUM":2,"LOW":3,"INFO":4,"UNKNOWN":5}
-          findings.sort(key=lambda x: (order.get(x["severity"], 99), x["category"], x["tool"], x["location"]))
+          for item in findings:
+              severity = item["severity"] if item["severity"] in severities else "UNKNOWN"
+              table[item["category"]][severity] += 1
+
+          order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "UNKNOWN": 5}
+          findings.sort(key=lambda item: (order.get(item["severity"], 99), item["category"], item["tool"], item["location"]))
 
           lines = []
           lines.append("REPORTE CENTRALIZADO DE SEGURIDAD")
-          lines.append("="*90)
+          lines.append("=" * 90)
           lines.append("")
           lines.append("RESUMEN EJECUTIVO")
-          lines.append("-"*90)
+          lines.append("-" * 90)
           lines.append(f"Hallazgos totales             : {len(findings)}")
-          lines.append(f"CrÃ­ticas + Altas              : {len([f for f in findings if f['severity'] in {'CRITICAL','HIGH'}])}")
+          lines.append(f"Criticas + Altas              : {len([item for item in findings if item['severity'] in {'CRITICAL','HIGH'}])}")
           lines.append(f"Hallazgos de calidad Ruff     : {len(quality)}")
           lines.append("")
           lines.append("ESTADO POR HERRAMIENTA / ARTEFACTO")
-          lines.append("-"*90)
-          for st in tool_status:
-              lines.append(f"- {st.get('tool', st.get('artifact'))}: {st.get('findings', st.get('status'))} | {st.get('artifact','')}")
+          lines.append("-" * 90)
+          for status in tool_status:
+              lines.append(f"- {status.get('tool', status.get('artifact'))}: {status.get('findings', status.get('status'))} | {status.get('artifact','')}")
           lines.append("")
-          lines.append("RESUMEN POR CATEGORÃA")
-          lines.append("-"*90)
-          lines.append(f"{'CategorÃ­a':35} {'CRITICAL':>8} {'HIGH':>5} {'MEDIUM':>7} {'LOW':>5} {'INFO':>5} {'UNKNOWN':>8}")
-          for c in categories:
-              lines.append(f"{c:35} {table[c]['CRITICAL']:>8} {table[c]['HIGH']:>5} {table[c]['MEDIUM']:>7} {table[c]['LOW']:>5} {table[c]['INFO']:>5} {table[c]['UNKNOWN']:>8}")
+          lines.append("RESUMEN POR CATEGORIA")
+          lines.append("-" * 90)
+          lines.append(f"{'Categoria':35} {'CRITICAL':>8} {'HIGH':>5} {'MEDIUM':>7} {'LOW':>5} {'INFO':>5} {'UNKNOWN':>8}")
+          for category in categories:
+              lines.append(f"{category:35} {table[category]['CRITICAL']:>8} {table[category]['HIGH']:>5} {table[category]['MEDIUM']:>7} {table[category]['LOW']:>5} {table[category]['INFO']:>5} {table[category]['UNKNOWN']:>8}")
 
           lines.append("")
           lines.append("TODOS LOS HALLAZGOS ORDENADOS POR CRITICIDAD")
-          lines.append("="*90)
+          lines.append("=" * 90)
 
           if not findings:
               lines.append("Sin hallazgos.")
           else:
-              for i, f in enumerate(findings, 1):
+              for index, item in enumerate(findings, 1):
                   lines.append("")
-                  lines.append(f"{i}. [{f['severity']}] [{f['category']}] {f['rule']}")
-                  lines.append(f"   Herramienta : {f['tool']}")
-                  lines.append(f"   LÃ­nea/Error : {f['location']}")
-                  lines.append(f"   Detalle     : {f['detail']}")
-                  if f.get("fp_note"):
-                      lines.append(f"   Nota FP     : {f['fp_note']}")
-                  lines.append(f"   Fuente      : {f['source']}")
+                  lines.append(f"{index}. [{item['severity']}] [{item['category']}] {item['rule']}")
+                  lines.append(f"   Herramienta : {item['tool']}")
+                  lines.append(f"   Linea/Error : {item['location']}")
+                  lines.append(f"   Detalle     : {item['detail']}")
+                  if item.get("fp_note"):
+                      lines.append(f"   Nota FP     : {item['fp_note']}")
+                  lines.append(f"   Fuente      : {item['source']}")
 
           lines.append("")
           lines.append("CALIDAD DE DESARROLLO / RUFF")
-          lines.append("="*90)
+          lines.append("=" * 90)
           if not quality:
               lines.append("Sin hallazgos.")
           else:
-              for i, q in enumerate(quality, 1):
+              for index, item in enumerate(quality, 1):
                   lines.append("")
-                  lines.append(f"{i}. {q.get('code','?')}")
-                  lines.append(f"   LÃ­nea/Error : {q.get('filename','?')}:{q.get('location',{}).get('row','?')}")
-                  lines.append(f"   Detalle     : {q.get('message','')}")
+                  lines.append(f"{index}. {item.get('code','?')}")
+                  lines.append(f"   Linea/Error : {item.get('filename','?')}:{item.get('location',{}).get('row','?')}")
+                  lines.append(f"   Detalle     : {item.get('message','')}")
 
           (outdir / "REPORTE_CENTRALIZADO_SEGURIDAD.txt").write_text("\n".join(lines), encoding="utf-8")
           (outdir / "REPORTE_CENTRALIZADO_SEGURIDAD.json").write_text(json.dumps({"findings": findings, "quality": quality, "tool_status": tool_status}, indent=2, ensure_ascii=False), encoding="utf-8")
           print((outdir / "REPORTE_CENTRALIZADO_SEGURIDAD.txt").read_text(encoding="utf-8"))
           PY
+          python3 https://urldefense.com/v3/__http://build_report.py__;!!P110LumUDw!91YVfWA3K4RJkH3EESUvJIVoj2olj-cEsz1zSxbeKHyvoCFp8_tH5zxQ5upkpf444kGst8_7eR_2i53N8yDnxV6LLbRVHg$ 
 
       - name: Upload centralized report
         if: always()
