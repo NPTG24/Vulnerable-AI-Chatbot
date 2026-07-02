@@ -1,7 +1,3 @@
-# REEMPLAZO SEGURO: SOLO CAMBIA LOS JOBS DE AI
-# Mantén todo lo demás igual en tu security.yml.
-# Reemplaza tus jobs actuales `code-ai-static` y `ai-security` por estos dos.
-
   code-ai-static:
     name: "AI/App Code - Static Analyzer"
     runs-on: ubuntu-latest
