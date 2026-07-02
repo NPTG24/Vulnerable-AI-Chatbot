@@ -8,6 +8,15 @@ on:
   schedule:
     - cron: "0 2 * * 1"
   workflow_dispatch:
+    inputs:
+      run_dast:
+        description: "Force-run DAST even outside schedule"
+        required: false
+        default: "false"
+      fail_on:
+        description: "Security gate: never, critical, high"
+        required: false
+        default: "never"
 
 permissions:
   contents: read
@@ -16,13 +25,193 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
+  DEFAULT_FAIL_ON: "never"
 
 jobs:
-  code-ai-static:
-    name: "AI/App Code - Precise Static Analyzer"
+  dependency-policy:
+    name: "Dependencies — Policy"
     runs-on: ubuntu-latest
     continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      - name: Check dependency pinning and resolvable versions
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import re
+          import subprocess
+          import sys
+          import tempfile
+
+          findings = []
+          skip_dirs = {".git", ".github", "node_modules", ".venv", "venv", "dist", "build", "__pycache__"}
+
+          def skip(path):
+              return any(part in skip_dirs for part in str(path).replace("\\", "/").split("/"))
+
+          def add(severity, rule, file_path, line, message, kind="vulnerability"):
+              findings.append({
+                  "tool": "Dependency Policy",
+                  "category": "Dependencias / Policy",
+                  "severity": severity,
+                  "rule": rule,
+                  "file": str(file_path),
+                  "line": int(line or 1),
+                  "message": message,
+                  "kind": kind
+              })
+
+          skip_req = re.compile(r"^\s*($|#|-r\s+|-c\s+|-f\s+|--|(https?|git|ssh)://|file:)", re.I)
+          exact_req = re.compile(r"^\s*([A-Za-z0-9_.-]+)(\[[A-Za-z0-9_,.-]+\])?\s*==\s*([A-Za-z0-9_.!+*-]+)\s*(;.*)?$")
+          any_pkg = re.compile(r"^\s*([A-Za-z0-9_.-]+)(\[[A-Za-z0-9_,.-]+\])?\s*([<>=!~]=?|===)?\s*([^;#\s]+)?")
+          pinned_python = []
+
+          req_files = sorted(set(pathlib.Path(".").glob("requirements*.txt")) | set(pathlib.Path(".").glob("**/requirements*.txt")))
+
+          for req in req_files:
+              if skip(req):
+                  continue
+
+              for lineno, raw in enumerate(req.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+                  line = raw.strip()
+                  if skip_req.match(line):
+                      continue
+
+                  clean = line.split(" #", 1)[0].strip()
+                  exact = exact_req.match(clean)
+
+                  if not exact:
+                      parsed = any_pkg.match(clean)
+                      if parsed:
+                          operator = parsed.group(3)
+                          version = parsed.group(4)
+                          if not operator or not version:
+                              add("MEDIUM", "PYTHON_DEPENDENCY_WITHOUT_VERSION", req, lineno, f"Dependencia Python sin version declarada: {line}")
+                          elif operator != "==":
+                              add("MEDIUM", "PYTHON_DEPENDENCY_NOT_EXACT_PIN", req, lineno, f"Dependencia Python sin pin exacto ==: {line}", "hygiene")
+                          else:
+                              add("MEDIUM", "PYTHON_DEPENDENCY_INVALID_FORMAT", req, lineno, f"Dependencia Python con formato no validable: {line}", "hygiene")
+                      else:
+                          add("MEDIUM", "PYTHON_DEPENDENCY_INVALID_FORMAT", req, lineno, f"Linea de dependencia Python no validable: {line}", "hygiene")
+                      continue
+
+                  pinned_python.append((exact.group(1), exact.group(3), req, lineno, clean))
+
+          for name, version, req, lineno, clean in pinned_python:
+              with tempfile.TemporaryDirectory() as tmpdir:
+                  cmd = [sys.executable, "-m", "pip", "download", "--no-deps", "--disable-pip-version-check", "-d", tmpdir, f"{name}=={version}"]
+                  try:
+                      proc = subprocess.run(cmd, text=True, capture_output=True, timeout=90)
+                  except subprocess.TimeoutExpired:
+                      add("INFO", "PYTHON_VERSION_VALIDATION_TIMEOUT", req, lineno, f"Timeout validando version Python: {clean}", "hygiene")
+                      continue
+
+                  output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).lower()
+                  if proc.returncode == 0:
+                      continue
+                  if "no matching distribution found" in output or "could not find a version" in output:
+                      add("HIGH", "PYTHON_PACKAGE_OR_VERSION_NOT_RESOLVABLE", req, lineno, f"Paquete o version Python no existe/no es resoluble: {clean}")
+                  elif any(x in output for x in ["temporary failure", "connection", "timed out", "proxy", "ssl", "network"]):
+                      add("INFO", "PYTHON_VERSION_VALIDATION_NETWORK_UNAVAILABLE", req, lineno, f"No se pudo validar por red/proxy/SSL: {clean}", "hygiene")
+                  else:
+                      add("INFO", "PYTHON_VERSION_VALIDATION_INCONCLUSIVE", req, lineno, f"Validacion inconclusa de version Python: {clean}", "hygiene")
+
+          exact_npm = re.compile(r"^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$")
+
+          for package_json in sorted(pathlib.Path(".").glob("**/package.json")):
+              if skip(package_json):
+                  continue
+
+              try:
+                  pkg = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+              except Exception:
+                  continue
+
+              for section in ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]:
+                  deps = pkg.get(section, {})
+                  if not isinstance(deps, dict):
+                      continue
+                  for dep_name, dep_version in deps.items():
+                      version = str(dep_version).strip()
+                      if version.startswith(("file:", "git+", "github:", "workspace:", "link:")):
+                          add("INFO", "NPM_LOCAL_OR_WORKSPACE_DEPENDENCY", package_json, 1, f"Dependencia npm local/workspace no validada: {dep_name}@{version}", "hygiene")
+                      elif version in {"", "*", "latest"}:
+                          add("MEDIUM", "NPM_DEPENDENCY_WITHOUT_VERSION", package_json, 1, f"Dependencia npm sin version exacta: {dep_name}@{version}")
+                      elif not exact_npm.match(version):
+                          add("MEDIUM", "NPM_DEPENDENCY_NOT_EXACT_PIN", package_json, 1, f"Dependencia npm sin version exacta: {dep_name}@{version}", "hygiene")
+                      else:
+                          proc = subprocess.run(["npm", "view", f"{dep_name}@{version}", "version", "--json"], text=True, capture_output=True, timeout=90)
+                          output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).lower()
+                          if proc.returncode != 0 and ("notarget" in output or "no matching version found" in output or "404" in output):
+                              add("HIGH", "NPM_PACKAGE_OR_VERSION_NOT_RESOLVABLE", package_json, 1, f"Paquete o version npm no existe/no es resoluble: {dep_name}@{version}")
+
+          pathlib.Path("dependency_policy_findings.json").write_text(json.dumps({"tool": "Dependency Policy", "findings": findings}, indent=2, ensure_ascii=False), encoding="utf-8")
+
+          rules = {}
+          results = []
+
+          def level(sev):
+              sev = str(sev).upper()
+              if sev in {"CRITICAL", "HIGH"}:
+                  return "error"
+              if sev == "MEDIUM":
+                  return "warning"
+              return "note"
+
+          for item in findings:
+              rid = item["rule"]
+              rules.setdefault(rid, {
+                  "id": rid,
+                  "name": rid,
+                  "shortDescription": {"text": rid},
+                  "fullDescription": {"text": item["message"]},
+                  "defaultConfiguration": {"level": level(item["severity"])}
+              })
+              results.append({
+                  "ruleId": rid,
+                  "level": level(item["severity"]),
+                  "message": {"text": item["message"]},
+                  "properties": {"kind": item.get("kind", "vulnerability"), "category": item.get("category", "Dependencias / Policy")},
+                  "locations": [{"physicalLocation": {"artifactLocation": {"uri": item["file"]}, "region": {"startLine": item["line"]}}}]
+              })
+
+          sarif = {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "Dependency Policy", "rules": list(rules.values())}}, "results": results}]}
+          pathlib.Path("dependency_policy.sarif").write_text(json.dumps(sarif, indent=2, ensure_ascii=False), encoding="utf-8")
+          print(f"Dependency policy findings: {len(findings)}")
+          PY
+
+      - name: Ensure dependency artifacts exist
+        if: always()
+        run: |
+          test -f dependency_policy_findings.json || echo '{"tool":"Dependency Policy","findings":[]}' > dependency_policy_findings.json
+          test -f dependency_policy.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Dependency Policy","rules":[]}},"results":[]}]}' > dependency_policy.sarif
+
+      - name: Upload dependency SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: dependency_policy.sarif
+          category: dependency-policy
+
+      - name: Upload dependency artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-policy-results
+          path: |
+            dependency_policy_findings.json
+            dependency_policy.sarif
+          retention-days: 30
+
+  code-ai-static:
+    name: "AI/App Code — Precise Static Analyzer"
+    runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,33 +223,15 @@ jobs:
           import ast
           import json
           import pathlib
+          import re
 
           skip_dirs = {".git", ".github", "node_modules", ".venv", "venv", "dist", "build", "__pycache__"}
           findings = []
 
-          DANGEROUS_AGENT_TOOLS = {
-              "PythonREPLTool",
-              "ShellTool",
-              "RequestsGetTool",
-              "RequestsPostTool",
-          }
-
-          USER_INPUT_NAMES = {
-              "query",
-              "user_query",
-              "prompt",
-              "message",
-              "msg",
-              "input",
-              "question",
-              "search_query",
-              "text",
-          }
-
           def skip(path):
               return any(part in skip_dirs for part in str(path).replace("\\", "/").split("/"))
 
-          def add(file, line, severity, rule, category, message, snippet="", confidence="HIGH"):
+          def add(file, line, severity, rule, category, message, snippet=""):
               findings.append({
                   "tool": "AI/App Static Analyzer",
                   "file": str(file),
@@ -69,15 +240,19 @@ jobs:
                   "rule": rule,
                   "category": category,
                   "message": message,
-                  "snippet": snippet[:400],
-                  "confidence": confidence,
+                  "snippet": snippet[:500]
               })
 
+          def line_text(lines, line):
+              if 1 <= int(line or 1) <= len(lines):
+                  return lines[int(line or 1) - 1].strip()
+              return ""
+
           def call_name(node):
-              if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35gUFWfJQ$ ):
+              if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAGf1yixkA$ ):
                   return call_name(node.func)
-              if isinstance(node, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ):
-                  return https://urldefense.com/v3/__http://node.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS369x_WSTQ$ 
+              if isinstance(node, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAH6gG7D7A$ ):
+                  return https://urldefense.com/v3/__http://node.id__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAGepioqoQ$ 
               if isinstance(node, ast.Attribute):
                   base = call_name(node.value)
                   return f"{base}.{node.attr}" if base else node.attr
@@ -86,100 +261,14 @@ jobs:
               return ""
 
           def const_str(node):
-              return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
-
-          def source_line(lines, line):
-              if 1 <= int(line or 1) <= len(lines):
-                  return lines[int(line or 1) - 1].strip()
-              return ""
-
-          def contains_name(node, names):
-              for child in ast.walk(node):
-                  if isinstance(child, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and https://urldefense.com/v3/__http://child.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34E1gomRg$  in names:
-                      return True
-              return False
-
-          def contains_request(node):
-              for child in ast.walk(node):
-                  name = call_name(child)
-                  if name == "request" or name.startswith("request."):
-                      return True
-              return False
-
-          def contains_env_set_yes(node):
-              for child in ast.walk(node):
-                  if isinstance(child, ast.Assign):
-                      for target in child.targets:
-                          if isinstance(target, ast.Subscript) and call_name(target.value) == "os.environ":
-                              if isinstance(child.value, ast.Constant) and str(child.value.value).lower() == "yes":
-                                  return True
-              return False
-
-          def env_key_from_subscript(node):
-              if isinstance(node, ast.Subscript) and call_name(node.value) == "os.environ":
-                  return const_str(node.slice)
+              if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                  return node.value
               return None
 
-          def literals_in(node):
-              values = []
-              for child in ast.walk(node):
-                  value = const_str(child)
-                  if value:
-                      values.append(value.lower())
-              return values
-
-          def is_route_function(node):
-              for dec in node.decorator_list:
-                  if isinstance(dec, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35gUFWfJQ$ ) and ".route" in call_name(dec):
-                      return True
-              return False
-
-          def function_calls(node):
-              calls = []
-              for child in ast.walk(node):
-                  if isinstance(child, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35gUFWfJQ$ ):
-                      name = call_name(child)
-                      if name:
-                          calls.append((name, child))
-              return calls
-
-          def call_has_arg_name(call, names):
-              for arg in call.args:
-                  if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37XCruY6A$  in names:
-                      return https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37XCruY6A$ 
-                  if contains_name(arg, names):
-                      return "<derived>"
-              for kw in call.keywords:
-                  if isinstance(kw.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and https://urldefense.com/v3/__http://kw.value.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37Tcsbk6A$  in names:
-                      return https://urldefense.com/v3/__http://kw.value.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37Tcsbk6A$ 
-                  if contains_name(kw.value, names):
-                      return "<derived>"
-              return ""
-
-          def has_chain_type_stuff(call):
-              for kw in call.keywords:
-                  if kw.arg == "chain_type" and const_str(kw.value) == "stuff":
-                      return True
-              return False
-
-          def build_call_graph(function_defs):
-              graph = {name: set() for name in function_defs}
-              for fname, fnode in function_defs.items():
-                  for cname, _ in function_calls(fnode):
-                      if cname in function_defs:
-                          graph[fname].add(cname)
-              return graph
-
-          def reachable_from_routes(route_functions, graph):
-              seen = set(route_functions)
-              stack = list(route_functions)
-              while stack:
-                  current = stack.pop()
-                  for nxt in graph.get(current, set()):
-                      if nxt not in seen:
-                          seen.add(nxt)
-                          stack.append(nxt)
-              return seen
+          def env_key(target):
+              if isinstance(target, ast.Subscript) and call_name(target.value) == "os.environ":
+                  return const_str(target.slice)
+              return None
 
           for py in pathlib.Path(".").rglob("*.py"):
               if skip(py):
@@ -191,151 +280,131 @@ jobs:
               try:
                   tree = ast.parse(text)
               except SyntaxError as error:
-                  add(py, error.lineno or 1, "MEDIUM", "PYTHON_SYNTAX_ERROR", "Codigo aplicativo", f"No se pudo analizar por SyntaxError: {error}", "", "HIGH")
+                  add(py, error.lineno or 1, "MEDIUM", "PYTHON_SYNTAX_ERROR", "Código aplicativo", f"SyntaxError impide analizar el archivo: {error}", "")
                   continue
 
-              function_defs = {https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34w_LYDFw$ : node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
-              route_functions = {name for name, node in function_defs.items() if is_route_function(node)}
-              graph = build_call_graph(function_defs)
-              route_reachable = reachable_from_routes(route_functions, graph)
+              has_flask_route = any("@app.route" in x or ".route(" in x for x in lines)
+              has_request_input = any("request.args.get" in x or "request.form.get" in x or "request.get_json" in x or "request.json" in x for x in lines)
+              has_rag = "RetrievalQA" in text or "FAISS" in text or "PyPDFLoader" in text
 
-              tainted_by_func = {}
+              if has_flask_route and has_request_input and has_rag:
+                  add(py, 1, "HIGH", "AI_FLASK_RAG_ATTACK_SURFACE", "AI / LLM / Agentic", "Superficie AI/RAG expuesta por Flask: hay rutas, input de request y componentes RAG/LLM en el mismo archivo. Revisar prompt injection, auth, rate limiting y aislamiento de datos.", "")
 
-              for fname, fnode in function_defs.items():
-                  tainted = set()
+              for node in ast.walk(tree):
+                  line = getattr(node, "lineno", 1)
+                  src = line_text(lines, line)
 
-                  for node in ast.walk(fnode):
-                      if isinstance(node, ast.Assign):
-                          if contains_request(node.value):
-                              for target in node.targets:
-                                  if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ):
-                                      tainted.add(https://urldefense.com/v3/__http://target.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS377JTOWHQ$ )
+                  if isinstance(node, ast.FunctionDef):
+                      if any(isinstance(dec, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAGf1yixkA$ ) and ".route" in call_name(dec) for dec in node.decorator_list):
+                          add(py, line, "INFO", "WEB_FLASK_ROUTE_AUTH_REVIEW", "Código aplicativo", f"Ruta Flask detectada en {https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAFDjMrJbA$ }(). Confirmar autenticación/autorización si expone datos o acciones.", src)
 
-                          value_names = {https://urldefense.com/v3/__http://child.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34E1gomRg$  for child in ast.walk(node.value) if isinstance(child, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ )}
-                          if value_names & tainted:
-                              for target in node.targets:
-                                  if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ):
-                                      tainted.add(https://urldefense.com/v3/__http://target.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS377JTOWHQ$ )
+                  if isinstance(node, ast.Assign):
+                      # request input variables
+                      value_dump = ast.dump(node.value)
+                      value_call = call_name(node.value)
+                      request_based = "request." in value_call or "request." in value_dump
 
-                  tainted_by_func[fname] = tainted
-
-              for fname, fnode in function_defs.items():
-                  tainted = set(tainted_by_func.get(fname, set()))
-
-                  for route in route_functions:
-                      rnode = function_defs[route]
-                      route_tainted = tainted_by_func.get(route, set())
-
-                      for _, call in function_calls(rnode):
-                          if call_name(call) == fname:
-                              for idx, arg in enumerate(call.args):
-                                  if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and (https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37XCruY6A$  in route_tainted or https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37XCruY6A$  in USER_INPUT_NAMES):
-                                      if idx < len(fnode.args.args):
-                                          tainted.add(fnode.args.args[idx].arg)
-
-                  tainted_by_func[fname] = tainted
-
-              for fname, fnode in function_defs.items():
-                  tainted = tainted_by_func.get(fname, set())
-                  is_reachable = fname in route_reachable
-                  reach = " Alcanzable desde una ruta Flask." if is_reachable else ""
-
-                  if fname in route_functions:
-                      add(py, fnode.lineno, "INFO", "WEB_FLASK_ROUTE_AUTH_REVIEW", "Codigo aplicativo", f"Ruta Flask detectada en {fname}(). Confirmar autenticacion/autorizacion si expone acciones o datos sensibles.", source_line(lines, fnode.lineno), "MEDIUM")
-
-                  for node in ast.walk(fnode):
-                      line = getattr(node, "lineno", fnode.lineno)
-
-                      if isinstance(node, ast.Assign):
+                      if request_based:
                           for target in node.targets:
-                              if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and "sensitive" in target.id.lower() and isinstance(node.value, (ast.List, ast.Tuple)):
-                                  words = [str(getattr(elt, "value", "")).lower() for elt in node.value.elts if isinstance(elt, ast.Constant)]
-                                  if any(w in {"secret", "secrets", "password", "passwords", "credential", "credentials", "key", "keys", "token"} for w in words):
-                                      add(py, line, "MEDIUM", "AI_KEYWORD_BLACKLIST_SECURITY_CONTROL", "AI / LLM / Agentic", "Prompt injection / bypass: blacklist de keywords sensibles usada como control de seguridad. Es evadible con encoding, separacion, idioma o reformulacion." + reach, source_line(lines, line), "HIGH")
+                              if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAH6gG7D7A$ ):
+                                  add(py, line, "INFO", "WEB_REQUEST_INPUT_ENTRYPOINT", "Código aplicativo", f"Entrada controlada por usuario asignada a '{https://urldefense.com/v3/__http://target.id__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAEm1SXPKg$ }'.", src)
 
-                          for target in node.targets:
-                              key = env_key_from_subscript(target)
-                              if key and any(k in key.lower() for k in ["secret", "owner", "token", "key", "password", "reveal"]):
-                                  add(py, line, "MEDIUM", "MUTABLE_SECURITY_STATE_IN_ENV", "AI / LLM / Agentic", f"Estado de seguridad/sensibilidad guardado en os.environ['{key}']. Si cambia por flujo de usuario puede generar bypass." + reach, source_line(lines, line), "HIGH")
+                      # sensitive_keywords
+                      for target in node.targets:
+                          if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAH6gG7D7A$ ) and "sensitive" in target.id.lower() and isinstance(node.value, (ast.List, ast.Tuple)):
+                              words = []
+                              for item in node.value.elts:
+                                  if isinstance(item, ast.Constant):
+                                      words.append(str(item.value).lower())
+                              if any(w in {"secret", "secrets", "password", "passwords", "credential", "credentials", "key", "keys", "token"} for w in words):
+                                  add(py, line, "MEDIUM", "AI_KEYWORD_BLACKLIST_SECURITY_CONTROL", "AI / LLM / Agentic", "Prompt injection / bypass: blacklist de keywords sensibles usada como control de seguridad. Es evadible con encoding, separación de caracteres, idioma o reformulación.", src)
 
-                      if isinstance(node, ast.If):
-                          lits = literals_in(node.test)
+                      # os.environ mutable security state
+                      for target in node.targets:
+                          key = env_key(target)
+                          if key and any(k in key.lower() for k in ["reveal", "secret", "owner", "token", "key", "password"]):
+                              add(py, line, "MEDIUM", "AI_MUTABLE_SECURITY_STATE_IN_ENV", "AI / LLM / Agentic", f"Estado de seguridad/sensibilidad guardado en os.environ['{key}']. Si cambia por flujo de usuario puede generar bypass.", src)
 
-                          if contains_env_set_yes(node) and len(set(lits)) >= 2:
-                              add(py, line, "HIGH", "PROMPT_TRIGGERED_SECURITY_FLAG_BYPASS", "AI / LLM / Agentic", "Prompt injection/backdoor: condicion basada en texto puede activar flags de seguridad con os.environ = 'yes'." + reach, source_line(lines, line), "HIGH")
+                  if isinstance(node, ast.If):
+                      condition = src.lower()
+                      if ("forget" in condition and "rules" in condition) or ("new" in condition and "operator" in condition):
+                          add(py, line, "HIGH", "AI_PROMPT_TRIGGERED_SECURITY_FLAG_BYPASS", "AI / LLM / Agentic", "Prompt injection/backdoor: condición textual permite activar comportamiento sensible o cambiar flags de seguridad.", src)
 
-                          if any(x in lits for x in ["script", "<script>"]):
-                              add(py, line, "MEDIUM", "WEAK_XSS_BLACKLIST_SCRIPT_ONLY", "Codigo aplicativo", "Mitigacion XSS debil: solo bloquea literal '<script>'. No reemplaza sanitizacion/encoding contextual.", source_line(lines, line), "HIGH")
+                      if "os.environ" in condition and "yes" in condition and any(x in condition for x in ["secret", "owner", "reveal", "token", "key"]):
+                          add(py, line, "HIGH", "AI_ENV_FLAG_AUTHORIZATION_GATE", "AI / LLM / Agentic", "Gate de autorización/divulgación sensible depende de os.environ y valor mutable. Riesgo de bypass de política.", src)
 
-                          for child in ast.walk(node.test):
-                              key = env_key_from_subscript(child)
-                              if key and any(k in key.lower() for k in ["secret", "owner", "token", "key", "password", "reveal"]):
-                                  add(py, line, "HIGH", "AI_ENV_FLAG_AUTHORIZATION_GATE", "AI / LLM / Agentic", f"Gate de autorizacion/divulgacion sensible depende de os.environ['{key}']; revisar bypass por estado mutable." + reach, source_line(lines, line), "HIGH")
-                                  break
+                      if "<script>" in condition:
+                          add(py, line, "MEDIUM", "WEB_WEAK_XSS_BLACKLIST_SCRIPT_ONLY", "Código aplicativo", "Mitigación XSS débil: solo bloquea literal '<script>'. No reemplaza sanitización/encoding contextual.", src)
 
-                      if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35gUFWfJQ$ ):
-                          cname = call_name(node)
+                  if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAGf1yixkA$ ):
+                      cname = call_name(node)
 
-                          if cname in DANGEROUS_AGENT_TOOLS or any(cname.endswith("." + x) for x in DANGEROUS_AGENT_TOOLS):
-                              add(py, line, "HIGH", "AI_AGENT_DANGEROUS_TOOL", "AI / LLM / Agentic", f"Agente/herramienta peligrosa detectada: {cname}. El modelo podria gatillar shell, HTTP o ejecucion de codigo." + reach, source_line(lines, line), "HIGH")
+                      if cname == "RetrievalQA.from_chain_type" or cname.endswith(".RetrievalQA.from_chain_type"):
+                          add(py, line, "MEDIUM", "AI_RAG_RETRIEVALQA_CHAIN", "AI / LLM / Agentic", "Uso de RetrievalQA/RAG detectado. Revisar prompt injection, autorización sobre documentos, aislamiento por tenant y filtrado de fuentes.", src)
+                          if "chain_type=\"stuff\"" in src or "chain_type='stuff'" in src:
+                              add(py, line, "MEDIUM", "AI_RAG_STUFF_CHAIN_PROMPT_INJECTION_RISK", "AI / LLM / Agentic", "RAG chain_type='stuff': contenido recuperado se inserta directo en el prompt; riesgo de prompt injection desde documentos.", src)
 
-                          if cname == "RetrievalQA.from_chain_type" or cname.endswith(".RetrievalQA.from_chain_type"):
-                              add(py, line, "MEDIUM", "AI_RAG_RETRIEVALQA_CHAIN", "AI / LLM / Agentic", "Uso de RetrievalQA/RAG detectado. Revisar prompt injection, autorizacion sobre documentos, aislamiento por tenant y filtrado de fuentes." + reach, source_line(lines, line), "HIGH")
-                              if has_chain_type_stuff(node):
-                                  add(py, line, "MEDIUM", "AI_RAG_STUFF_CHAIN_PROMPT_INJECTION_RISK", "AI / LLM / Agentic", "RAG chain_type='stuff': contenido recuperado se inserta directo en el prompt; riesgo de prompt injection desde documentos." + reach, source_line(lines, line), "HIGH")
+                      if cname in {"PyPDFLoader", "UnstructuredFileLoader", "Docx2txtLoader", "CSVLoader", "TextLoader", "DirectoryLoader"}:
+                          add(py, line, "MEDIUM", "AI_DOCUMENT_LOADER_PROMPT_INJECTION_RISK", "AI / LLM / Agentic", f"Loader de documento {cname} detectado. Validar origen, tipo, tamaño, sandboxing y prompt injection desde documentos.", src)
 
-                          if cname.endswith(".run") or cname.endswith(".invoke") or cname.endswith(".predict") or cname.endswith(".generate"):
-                              tainted_arg = call_has_arg_name(node, tainted | USER_INPUT_NAMES)
-                              if tainted_arg:
-                                  add(py, line, "HIGH", "AI_USER_INPUT_TO_LLM_OR_RAG", "AI / LLM / Agentic", f"Prompt injection: input potencialmente controlado por usuario ({tainted_arg}) llega a {cname}()." + reach, source_line(lines, line), "HIGH")
+                      if cname in {"FAISS.from_documents", "Chroma.from_documents"}:
+                          add(py, line, "MEDIUM", "AI_VECTORSTORE_FROM_DOCUMENTS", "AI / LLM / Agentic", "Vectorstore desde documentos detectado. Revisar data poisoning, PII, secretos embebidos y autorización de recuperación.", src)
 
-                          if cname in {"PyPDFLoader", "UnstructuredFileLoader", "Docx2txtLoader", "CSVLoader", "TextLoader", "DirectoryLoader"}:
-                              add(py, line, "MEDIUM", "AI_DOCUMENT_LOADER_PROMPT_INJECTION_RISK", "AI / LLM / Agentic", f"Loader de documento {cname} detectado. Validar origen, tipo, tamano, sandboxing y prompt injection desde documentos." + reach, source_line(lines, line), "HIGH")
+                      if cname.endswith(".save_local") or cname.endswith(".load_local") or cname == "FAISS.load_local":
+                          add(py, line, "MEDIUM", "AI_LOCAL_VECTORSTORE_PERSISTENCE", "AI / LLM / Agentic", "Persistencia/carga local de vectorstore detectada. Revisar poisoning, manipulación local, aislamiento y deserialización insegura.", src)
 
-                          if cname in {"FAISS.from_documents", "Chroma.from_documents"}:
-                              add(py, line, "MEDIUM", "AI_VECTORSTORE_FROM_DOCUMENTS", "AI / LLM / Agentic", "Vectorstore desde documentos detectado. Revisar data poisoning, PII, secretos embebidos y autorizacion de recuperacion." + reach, source_line(lines, line), "HIGH")
+                      if cname in {"OpenAI", "OpenAIEmbeddings", "ChatOpenAI"}:
+                          severity = "MEDIUM" if has_flask_route else "INFO"
+                          add(py, line, severity, "AI_PROVIDER_USAGE_COST_AND_DATA_BOUNDARY", "AI / LLM / Agentic", f"Uso de {cname} detectado. Revisar API key, límites de costo, rate limiting, logging seguro y datos sensibles enviados al proveedor.", src)
 
-                          if cname.endswith(".save_local") or cname.endswith(".load_local") or cname == "FAISS.load_local":
-                              add(py, line, "MEDIUM", "AI_LOCAL_VECTORSTORE_PERSISTENCE", "AI / LLM / Agentic", "Persistencia/carga local de vectorstore detectada. Revisar poisoning, manipulacion local, aislamiento y deserializacion insegura." + reach, source_line(lines, line), "HIGH")
+                      if cname.endswith(".run") or cname.endswith(".invoke") or cname.endswith(".predict") or cname.endswith(".generate"):
+                          arg_names = []
+                          for arg in node.args:
+                              if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAH6gG7D7A$ ):
+                                  arg_names.append(https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAF--NOr2w$ )
+                          if any(x in {"query", "user_query", "prompt", "msg", "message", "search_query"} for x in arg_names):
+                              add(py, line, "HIGH", "AI_USER_INPUT_TO_LLM_OR_RAG", "AI / LLM / Agentic", f"Prompt injection: variable potencialmente controlada por usuario llega a {cname}().", src)
 
-                          if cname in {"OpenAI", "OpenAIEmbeddings", "ChatOpenAI"}:
-                              sev = "MEDIUM" if is_reachable else "INFO"
-                              add(py, line, sev, "AI_PROVIDER_USAGE_COST_AND_DATA_BOUNDARY", "AI / LLM / Agentic", f"Uso de {cname} detectado. Revisar API key, limites de costo, rate limiting, logging seguro y datos sensibles enviados al proveedor." + reach, source_line(lines, line), "MEDIUM")
+                      if cname == "time.sleep":
+                          seconds = None
+                          if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, (int, float)):
+                              seconds = node.args[0].value
+                          if seconds and seconds >= 30:
+                              add(py, line, "MEDIUM", "WEB_ROUTE_LONG_SLEEP_DOS", "Código aplicativo", f"time.sleep({seconds}) detectado; si está en ruta HTTP bloquea workers y puede causar DoS.", src)
 
-                          if cname == "time.sleep":
-                              seconds = None
-                              if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, (int, float)):
-                                  seconds = node.args[0].value
-                              if seconds and seconds >= 30:
-                                  add(py, line, "MEDIUM", "WEB_ROUTE_LONG_SLEEP_DOS", "Codigo aplicativo", f"time.sleep({seconds}) detectado; si esta en ruta HTTP bloquea workers y puede causar DoS." + reach, source_line(lines, line), "HIGH")
+                      if cname.endswith(".lower"):
+                          if "request." in text[: text.find(src) if src in text else len(text)]:
+                              add(py, line, "MEDIUM", "WEB_REQUEST_PARAM_NONE_DOS", "Código aplicativo", "Uso de .lower() sobre dato que puede venir de request. Si el parámetro falta puede causar 500/DoS.", src)
 
-                          if cname.endswith(".run"):
-                              first = const_str(node.args[0]) if node.args else None
-                              host_kw = None
-                              for kw in node.keywords:
-                                  if kw.arg == "host":
-                                      host_kw = const_str(kw.value)
-                              if first == "https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34ibbNeAQ$ " or host_kw == "https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34ibbNeAQ$ ":
-                                  add(py, line, "MEDIUM", "WEB_FLASK_PUBLIC_HOST", "Codigo aplicativo", "Flask expuesto en https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34ibbNeAQ$ . Confirmar autenticacion, firewall/proxy y WSGI productivo.", source_line(lines, line), "HIGH")
+              # Regex de respaldo para cosas multilinea o difíciles para AST.
+              for idx, raw in enumerate(lines, 1):
+                  line = raw.strip()
 
-                          if cname == "re.sub":
-                              tainted_arg = call_has_arg_name(node, tainted | USER_INPUT_NAMES)
-                              if tainted_arg:
-                                  add(py, line, "INFO", "INPUT_SANITIZATION_REGEX_REVIEW", "Codigo aplicativo", f"Sanitizacion con regex sobre input ({tainted_arg}). Confirmar allowlist suficiente para el contexto y que no genere bypass logico.", source_line(lines, line), "MEDIUM")
+                  if "qa.run(" in line or ".run(query" in line or ".run(user_query" in line:
+                      add(py, idx, "HIGH", "AI_USER_INPUT_TO_LLM_OR_RAG", "AI / LLM / Agentic", "Prompt injection: query/input llega a qa.run()/chain.run().", line)
 
-                          if cname.endswith(".lower") and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ):
-                              base = https://urldefense.com/v3/__http://node.func.value.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37iOK3wLw$ 
-                              if base in tainted:
-                                  add(py, line, "MEDIUM", "WEB_REQUEST_PARAM_NONE_DOS", "Codigo aplicativo", f"Parametro de request '{base}' usado con .lower() sin check visible de None; puede causar 500/DoS si falta el parametro.", source_line(lines, line), "HIGH")
+                  if "request.args.get" in line and "msg" in line:
+                      add(py, idx, "INFO", "WEB_REQUEST_MSG_ENTRYPOINT", "Código aplicativo", "Entrada de usuario desde request.args.get('msg').", line)
 
-                  if is_reachable:
-                      expensive = []
-                      for _, call in function_calls(fnode):
-                          cname = call_name(call)
-                          if cname in {"OpenAIEmbeddings", "FAISS.from_documents", "RetrievalQA.from_chain_type"} or cname.endswith(".save_local") or cname == "FAISS.load_local":
-                              expensive.append(cname)
-                      if len(set(expensive)) >= 3:
-                          add(py, fnode.lineno, "MEDIUM", "AI_EXPENSIVE_RAG_REBUILT_PER_REQUEST", "AI / LLM / Agentic", f"Posible DoS/costo: flujo alcanzable desde ruta reconstruye RAG/embeddings/vectorstore por request ({', '.join(sorted(set(expensive)))}).", source_line(lines, fnode.lineno), "HIGH")
+                  if "reveal_secret" in line or "reveal_owner" in line:
+                      if "os.environ" in line:
+                          add(py, idx, "MEDIUM", "AI_REVEAL_FLAG_MUTABLE_ENV", "AI / LLM / Agentic", "Flag reveal_* en os.environ detectado. Revisar bypass de política y exposición de secretos/owner.", line)
+
+                  if "if '<script>' in" in line or 'if "<script>" in' in line:
+                      add(py, idx, "MEDIUM", "WEB_WEAK_XSS_BLACKLIST_SCRIPT_ONLY", "Código aplicativo", "Mitigación XSS débil: solo filtra literal <script>.", line)
+
+              if has_flask_route and has_rag:
+                  expensive_terms = ["OpenAIEmbeddings", "FAISS.from_documents", "save_local", "FAISS.load_local", "RetrievalQA.from_chain_type"]
+                  count = sum(1 for term in expensive_terms if term in text)
+                  if count >= 3:
+                      add(py, 1, "MEDIUM", "AI_EXPENSIVE_RAG_REBUILT_PER_REQUEST", "AI / LLM / Agentic", "Posible DoS/costo: el archivo combina rutas Flask y reconstrucción de embeddings/vectorstore/RAG. Revisar cache, rate limiting y límites de costo.", "")
+
+          # deduplicate
+          unique = {}
+          for item in findings:
+              key = (item["file"], item["line"], item["rule"], item["message"])
+              unique[key] = item
+          findings = list(unique.values())
 
           pathlib.Path("ai_app_static_findings.json").write_text(json.dumps({"tool": "AI/App Static Analyzer", "findings": findings}, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -366,7 +435,6 @@ jobs:
                   "properties": {
                       "kind": "vulnerability",
                       "category": f["category"],
-                      "confidence": f["confidence"],
                       "snippet": f["snippet"],
                   },
                   "locations": [{
@@ -413,11 +481,251 @@ jobs:
             ai_app_static.sarif
           retention-days: 30
 
-  ai-security:
-    name: "AI Security - Semgrep LLM Rules"
+  ruff:
+    name: "Dev Quality — Ruff"
     runs-on: ubuntu-latest
     continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Run Ruff as development-quality report only
+        run: |
+          ruff check . --output-format=json > ruff_lint.json || true
+          ruff check . --output-format=full > ruff_lint_full.txt || true
+          ruff format . --check --diff > ruff_format_diff.txt || true
+          python3 - <<'PY'
+          import json
+          import pathlib
+          try:
+              data = json.loads(pathlib.Path("ruff_lint.json").read_text(encoding="utf-8") or "[]")
+          except Exception:
+              data = []
+          pathlib.Path("ruff_dev_quality_findings.json").write_text(json.dumps({"tool": "Ruff", "kind": "development_quality", "findings": data}, indent=2, ensure_ascii=False), encoding="utf-8")
+          pathlib.Path("ruff_dev_quality.sarif").write_text('{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Ruff Dev Quality","rules":[]}},"results":[]}]}', encoding="utf-8")
+          PY
+
+      - name: Upload Ruff dev-quality SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ruff_dev_quality.sarif
+          category: ruff-dev-quality
+
+      - name: Upload Ruff artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-dev-quality-results
+          path: |
+            ruff_lint.json
+            ruff_lint_full.txt
+            ruff_format_diff.txt
+            ruff_dev_quality_findings.json
+            ruff_dev_quality.sarif
+          retention-days: 30
+
+  codeql:
+    name: "SAST — CodeQL (${{ matrix.language }})"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        continue-on-error: true
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4
+        continue-on-error: true
+
+      - name: Analyze and upload CodeQL SARIF
+        uses: github/codeql-action/analyze@v4
+        continue-on-error: true
+        with:
+          category: "/language:${{ matrix.language }}"
+          output: codeql-results
+          upload: true
+
+      - name: Normalize CodeQL artifacts
+        if: always()
+        run: |
+          mkdir -p codeql-results
+          if ! find codeql-results -name "*.sarif" -type f | grep -q .; then
+            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"CodeQL","rules":[]}},"results":[]}]}' > codeql-results/codeql_${{ matrix.language }}.sarif
+          fi
+          python3 - <<'PY'
+          import json
+          import pathlib
+          findings = []
+          for sarif in pathlib.Path("codeql-results").rglob("*.sarif"):
+              try:
+                  data = json.loads(sarif.read_text(encoding="utf-8", errors="ignore"))
+              except Exception:
+                  continue
+              for run in data.get("runs", []):
+                  tool = run.get("tool", {}).get("driver", {}).get("name", "CodeQL")
+                  for result in run.get("results", []) or []:
+                      rid = result.get("ruleId", "")
+                      level = result.get("level", "warning")
+                      severity = "HIGH" if level == "error" else ("MEDIUM" if level == "warning" else "LOW")
+                      msg = result.get("message", {}).get("text", "")
+                      loc = "?"
+                      try:
+                          phys = result.get("locations", [{}])[0].get("physicalLocation", {})
+                          uri = phys.get("artifactLocation", {}).get("uri", "?")
+                          line = phys.get("region", {}).get("startLine", "?")
+                          loc = f"{uri}:{line}"
+                      except Exception:
+                          pass
+                      findings.append({"tool": tool, "rule": rid, "severity": severity, "category": "Código aplicativo", "location": loc, "message": msg})
+          pathlib.Path("codeql_findings.json").write_text(json.dumps({"tool": "CodeQL", "findings": findings}, indent=2, ensure_ascii=False), encoding="utf-8")
+          PY
+
+      - name: Upload CodeQL artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-${{ matrix.language }}-results
+          path: |
+            codeql-results
+            codeql_findings.json
+          retention-days: 30
+
+  semgrep:
+    name: "SAST — Semgrep OSS"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade pip
+          pip install semgrep
+
+      - name: Create high-signal app security rules
+        run: |
+          mkdir -p .semgrep/app-security
+          cat > .semgrep/app-security/app_rules.yml <<'YAML_RULES'
+          rules:
+            - id: web-python-flask-public-host
+              languages: [python]
+              severity: WARNING
+              message: "Flask app is exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAEzi25RlA$ . Confirm network controls, authentication and production WSGI deployment."
+              pattern-either:
+                - pattern: app.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAEzi25RlA$ ", ...)
+                - pattern: app.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAEzi25RlA$ ", ...)
+                - pattern: $APP.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAEzi25RlA$ ", ...)
+                - pattern: $APP.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!4BMj2Kk6oeIOXEMENMirgb3cIF1YrI7ogYcXK5gu4I0-0VyyZFcH9j_ZHtFtnCOy6_ai07hXM72_vY_-5-w3gAEzi25RlA$ ", ...)
+
+            - id: web-python-route-long-sleep-dos
+              languages: [python]
+              severity: WARNING
+              message: "Request handler sleeps for a long time. This can tie up workers and cause denial of service."
+              patterns:
+                - pattern: |
+                    @app.route(...)
+                    def $FUNC(...):
+                        ...
+                        time.sleep($SECONDS)
+                        ...
+                - metavariable-comparison:
+                    metavariable: $SECONDS
+                    comparison: $SECONDS >= 30
+
+            - id: web-python-xss-blacklist-script-only
+              languages: [python]
+              severity: WARNING
+              message: "Weak XSS mitigation: blacklist only checks literal <script>. Use contextual output encoding/sanitization."
+              pattern-either:
+                - pattern: |
+                    if "<script>" in $VALUE:
+                        ...
+                - pattern: |
+                    if '<script>' in $VALUE:
+                        ...
+          YAML_RULES
+
+      - name: Run Semgrep official and custom rules
+        run: |
+          semgrep --config p/security-audit --config p/owasp-top-ten --config p/python --config p/javascript --config p/typescript --config p/secrets --config .semgrep/app-security \
+            --exclude .github/workflows/** \
+            --exclude tests/** \
+            --exclude test/** \
+            --exclude node_modules/** \
+            --exclude .venv/** \
+            --exclude venv/** \
+            --exclude dist/** \
+            --exclude build/** \
+            --sarif --output semgrep.sarif . || true
+
+          semgrep --config p/security-audit --config p/owasp-top-ten --config p/python --config p/javascript --config p/typescript --config p/secrets --config .semgrep/app-security \
+            --exclude .github/workflows/** \
+            --exclude tests/** \
+            --exclude test/** \
+            --exclude node_modules/** \
+            --exclude .venv/** \
+            --exclude venv/** \
+            --exclude dist/** \
+            --exclude build/** \
+            --json --output semgrep.json . || true
+
+      - name: Ensure Semgrep artifacts exist
+        if: always()
+        run: |
+          test -f semgrep.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Semgrep OSS","rules":[]}},"results":[]}]}' > semgrep.sarif
+          test -f semgrep.json || echo '{"results":[]}' > semgrep.json
+
+      - name: Upload Semgrep SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Upload Semgrep artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-results
+          path: |
+            semgrep.sarif
+            semgrep.json
+            .semgrep/app-security/app_rules.yml
+          retention-days: 30
+
+  ai-security:
+    name: "AI Security — Semgrep LLM Rules"
+    runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -441,11 +749,6 @@ jobs:
               languages: [python]
               severity: ERROR
               message: "AI Prompt Injection: variable input reaches RetrievalQA/LLM run(). Validate prompt injection and authorization controls."
-              metadata:
-                category: security
-                technology: [ai, llm, rag, langchain]
-                owasp_llm: LLM01 Prompt Injection
-                confidence: HIGH
               pattern-either:
                 - pattern: $QA.run($QUERY)
                 - pattern: $CHAIN.run($QUERY)
@@ -455,11 +758,6 @@ jobs:
               languages: [python]
               severity: WARNING
               message: "RAG chain_type='stuff' detected. Retrieved content is stuffed into prompt; review prompt injection from documents."
-              metadata:
-                category: security
-                technology: [ai, rag, langchain]
-                owasp_llm: LLM01 Prompt Injection
-                confidence: HIGH
               pattern-either:
                 - pattern: RetrievalQA.from_chain_type(..., chain_type="stuff", ...)
                 - pattern: RetrievalQA.from_chain_type(..., chain_type='stuff', ...)
@@ -468,11 +766,6 @@ jobs:
               languages: [python]
               severity: WARNING
               message: "Prompt Injection bypass: keyword blacklist appears to protect secrets/system rules."
-              metadata:
-                category: security
-                technology: [ai, prompt-injection]
-                owasp_llm: LLM01 Prompt Injection
-                confidence: HIGH
               pattern-either:
                 - pattern: |
                     sensitive_keywords = [...]
@@ -484,11 +777,6 @@ jobs:
               languages: [python]
               severity: ERROR
               message: "Prompt Injection/backdoor: user-controlled text can toggle environment/security flag."
-              metadata:
-                category: security
-                technology: [ai, prompt-injection, backdoor]
-                owasp_llm: LLM01 Prompt Injection
-                confidence: HIGH
               pattern-either:
                 - pattern: |
                     if "forget" in $INPUT and "rules" in $INPUT:
@@ -504,11 +792,6 @@ jobs:
               languages: [python]
               severity: ERROR
               message: "Sensitive disclosure/authorization gate controlled by mutable environment variable."
-              metadata:
-                category: security
-                technology: [ai, secrets, authorization]
-                owasp_llm: LLM02 Sensitive Information Disclosure
-                confidence: HIGH
               pattern-either:
                 - pattern: |
                     if os.environ[$KEY] != "yes":
@@ -523,11 +806,6 @@ jobs:
               languages: [python]
               severity: WARNING
               message: "Prompt Injection from documents: AI/RAG document loader detected. Validate origin, type, size and sandboxing."
-              metadata:
-                category: security
-                technology: [ai, rag, document-loader]
-                owasp_llm: LLM03 Supply Chain / LLM01 Prompt Injection
-                confidence: HIGH
               pattern-either:
                 - pattern: PyPDFLoader($FILE)
                 - pattern: UnstructuredFileLoader($FILE)
@@ -540,11 +818,6 @@ jobs:
               languages: [python]
               severity: WARNING
               message: "Local vectorstore persistence detected. Review poisoning, tenant isolation, sensitive embeddings and unsafe deserialization."
-              metadata:
-                category: security
-                technology: [ai, rag, vectorstore]
-                owasp_llm: LLM03 Supply Chain / LLM02 Sensitive Information Disclosure
-                confidence: HIGH
               pattern-either:
                 - pattern: $VECTORSTORE.save_local(...)
                 - pattern: FAISS.load_local(...)
@@ -554,11 +827,6 @@ jobs:
               languages: [python]
               severity: ERROR
               message: "AI Prompt Injection: Flask request input flows to LLM/chain."
-              metadata:
-                category: security
-                technology: [ai, llm, flask]
-                owasp_llm: LLM01 Prompt Injection
-                confidence: HIGH
               mode: taint
               pattern-sources:
                 - pattern: request.args.get(...)
@@ -573,26 +841,6 @@ jobs:
                 - pattern: $QA.run($SINK)
                 - pattern: $CLIENT.chat.completions.create(..., messages=$SINK, ...)
                 - pattern: $CLIENT.responses.create(..., input=$SINK, ...)
-
-            - id: ai-js-user-input-direct-to-openai-prompt
-              languages: [javascript, typescript]
-              severity: ERROR
-              message: "AI Prompt Injection: req/user input flows directly into LLM prompt/messages."
-              metadata:
-                category: security
-                technology: [ai, llm, openai, express]
-                owasp_llm: LLM01 Prompt Injection
-                confidence: HIGH
-              mode: taint
-              pattern-sources:
-                - pattern: req.body.$FIELD
-                - pattern: req.query.$FIELD
-                - pattern: req.params.$FIELD
-                - pattern: request.body.$FIELD
-              pattern-sinks:
-                - pattern: $CLIENT.chat.completions.create({..., messages: $SINK, ...})
-                - pattern: openai.chat.completions.create({..., messages: $SINK, ...})
-                - pattern: $CLIENT.responses.create({..., input: $SINK, ...})
           YAML_RULES
 
       - name: Run precise AI Semgrep rules
@@ -620,39 +868,6 @@ jobs:
             --exclude build/** \
             --json --output semgrep_ai.json . || true
 
-      - name: Normalize AI SARIF metadata
-        if: always()
-        continue-on-error: true
-        run: |
-          python3 - <<'PY'
-          import json
-          import pathlib
-
-          p = pathlib.Path("semgrep_ai.sarif")
-
-          if not p.exists():
-              p.write_text('{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"AI Security","rules":[]}},"results":[]}]}', encoding="utf-8")
-
-          try:
-              data = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
-          except Exception:
-              data = {"version": "2.1.0", "runs": []}
-
-          if not data.get("runs"):
-              data["runs"] = [{"tool": {"driver": {"name": "AI Security", "rules": []}}, "results": []}]
-
-          for run in data.get("runs", []):
-              driver = run.setdefault("tool", {}).setdefault("driver", {})
-              driver["name"] = "AI Security - Semgrep LLM Rules"
-              driver["informationUri"] = "https://urldefense.com/v3/__https://owasp.org/www-project-top-10-for-large-language-model-applications/__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37POht3_Q$ "
-
-              for result in run.get("results", []):
-                  result.setdefault("properties", {})["kind"] = "vulnerability"
-                  result.setdefault("properties", {})["category"] = "AI / LLM / Agentic"
-
-          p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-          PY
-
       - name: Ensure AI artifacts exist
         if: always()
         run: |
@@ -678,115 +893,389 @@ jobs:
             .semgrep/ai-security/ai_rules.yml
           retention-days: 30
 
-  central-ai-report:
-    name: "Report - AI Security Summary"
+  sca:
+    name: "SCA — pip-audit + Trivy"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - name: Run pip-audit against project files
+        run: |
+          if [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt --format json --output pip_audit_results.json --progress-spinner off || true
+            pip-audit -r requirements.txt --format json --output pip_audit_osv.json --progress-spinner off --vulnerability-service osv || true
+          else
+            pip-audit --format json --output pip_audit_results.json --progress-spinner off || true
+            pip-audit --format json --output pip_audit_osv.json --progress-spinner off --vulnerability-service osv || true
+          fi
+          echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"pip-audit","rules":[]}},"results":[]}]}' > pip_audit.sarif
+
+      - name: Run Trivy filesystem JSON and SARIF
+        continue-on-error: true
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$PWD:/repo" aquasec/trivy:latest fs --scanners vuln,secret,misconfig --format json --output /repo/trivy_results.json --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --skip-dirs /repo/.git --skip-dirs /repo/node_modules /repo || true
+          docker run --rm --user "$(id -u):$(id -g)" -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$PWD:/repo" aquasec/trivy:latest fs --scanners vuln,secret,misconfig --format sarif --output /repo/trivy_results.sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --skip-dirs /repo/.git --skip-dirs /repo/node_modules /repo || true
+
+      - name: Ensure SCA artifacts exist
+        if: always()
+        run: |
+          test -f pip_audit_results.json || echo '{"dependencies":[]}' > pip_audit_results.json
+          test -f pip_audit_osv.json || echo '{"dependencies":[]}' > pip_audit_osv.json
+          test -f pip_audit.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"pip-audit","rules":[]}},"results":[]}]}' > pip_audit.sarif
+          test -f trivy_results.json || echo '{"Results":[]}' > trivy_results.json
+          test -f trivy_results.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy","rules":[]}},"results":[]}]}' > trivy_results.sarif
+
+      - name: Upload pip-audit SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: pip_audit.sarif
+          category: pip-audit
+
+      - name: Upload Trivy SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy_results.sarif
+          category: trivy-sca
+
+      - name: Upload SCA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-results
+          path: |
+            pip_audit_results.json
+            pip_audit_osv.json
+            pip_audit.sarif
+            trivy_results.json
+            trivy_results.sarif
+          retention-days: 30
+
+  secret-scan:
+    name: "Secrets — Gitleaks"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks without failing job
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 detect --source /repo --report-format json --report-path /repo/gitleaks_report.json --exit-code 0 --redact --verbose || true
+          echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Gitleaks","rules":[]}},"results":[]}]}' > gitleaks.sarif
+
+      - name: Ensure Gitleaks artifacts exist
+        if: always()
+        run: |
+          test -f gitleaks_report.json || echo '[]' > gitleaks_report.json
+          test -f gitleaks.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Gitleaks","rules":[]}},"results":[]}]}' > gitleaks.sarif
+
+      - name: Upload Gitleaks SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+
+      - name: Upload Gitleaks artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-results
+          path: |
+            gitleaks_report.json
+            gitleaks.sarif
+          retention-days: 30
+
+  docker-security:
+    name: "Docker — Hadolint + Dockle"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Hadolint on Dockerfiles
+        continue-on-error: true
+        run: |
+          echo "[]" > hadolint_results.json
+          echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Hadolint","rules":[]}},"results":[]}]}' > hadolint.sarif
+          dockerfiles="$(find . -type f \( -name 'Dockerfile' -o -name 'Dockerfile.*' \) -not -path './.git/*' -not -path './node_modules/*')"
+          if [ -n "$dockerfiles" ]; then
+            for file in $dockerfiles; do
+              docker run --rm -i hadolint/hadolint:latest hadolint --format json - < "$file" > hadolint_tmp.json || true
+              python3 - "$file" <<'PY'
+          import json, pathlib, sys
+          file = sys.argv[1]
+          out = pathlib.Path("hadolint_results.json")
+          try:
+              current = json.loads(out.read_text())
+          except Exception:
+              current = []
+          try:
+              data = json.loads(pathlib.Path("hadolint_tmp.json").read_text() or "[]")
+          except Exception:
+              data = []
+          if isinstance(data, dict):
+              data = [data]
+          for x in data:
+              if isinstance(x, dict):
+                  x["file"] = file
+                  current.append(x)
+          out.write_text(json.dumps(current, indent=2))
+          PY
+            done
+          fi
+          echo "[]" > dockle_results.json
+
+      - name: Upload Docker security artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-security-results
+          path: |
+            hadolint_results.json
+            hadolint.sarif
+            dockle_results.json
+          retention-days: 30
+
+  iac-checkov:
+    name: "IaC — Checkov full framework"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Checkov full IaC scan
+        continue-on-error: true
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: all
+          soft_fail: true
+          output_format: sarif,json
+          output_file_path: checkov_results
+          download_external_modules: false
+          quiet: true
+
+      - name: Normalize Checkov artifacts
+        if: always()
+        run: |
+          if [ -d checkov_results ]; then
+            find checkov_results -name "*.sarif" -type f -print -quit | xargs -r -I{} cp "{}" checkov_results.sarif
+            find checkov_results -name "*.json" -type f -print -quit | xargs -r -I{} cp "{}" checkov_results.json
+          fi
+          test -f checkov_results.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov","rules":[]}},"results":[]}]}' > checkov_results.sarif
+          test -f checkov_results.json || echo '{"results":{"failed_checks":[]}}' > checkov_results.json
+
+      - name: Upload Checkov SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: checkov_results.sarif
+          category: checkov-iac
+
+      - name: Upload Checkov artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-results
+          path: |
+            checkov_results.sarif
+            checkov_results.json
+          retention-days: 30
+
+  centralized-report:
+    name: "Report — Centralized Security Summary"
     runs-on: ubuntu-latest
     needs:
+      - dependency-policy
       - code-ai-static
+      - ruff
+      - codeql
+      - semgrep
       - ai-security
+      - sca
+      - secret-scan
+      - docker-security
+      - iac-checkov
     if: always()
     continue-on-error: true
-
     steps:
-      - name: Download AI artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          path: all_ai_results
+          path: all_scan_results
 
-      - name: Build AI report
+      - name: Build centralized report
         run: |
           python3 - <<'PY'
           import json
           import pathlib
 
-          root = pathlib.Path("all_ai_results")
-          output_dir = pathlib.Path("ai-security-report")
-          output_dir.mkdir(exist_ok=True)
-
+          root = pathlib.Path("all_scan_results")
+          outdir = pathlib.Path("central-security-report")
+          outdir.mkdir(exist_ok=True)
           findings = []
+          quality = []
 
-          def norm(sev):
-              sev = str(sev or "UNKNOWN").upper()
-              mapping = {"ERROR": "HIGH", "WARNING": "MEDIUM", "WARN": "MEDIUM", "NOTE": "LOW"}
-              return mapping.get(sev, sev)
+          def norm(s):
+              s = str(s or "UNKNOWN").upper()
+              return {"ERROR":"HIGH","WARNING":"MEDIUM","WARN":"MEDIUM","NOTE":"LOW","STYLE":"LOW"}.get(s, s)
 
-          def add(category, severity, tool, location, detail, rule):
+          def add(category, severity, tool, location, detail, rule="", source=""):
               findings.append({
                   "category": category,
                   "severity": norm(severity),
                   "tool": tool,
-                  "location": location,
-                  "detail": detail,
-                  "rule": rule,
+                  "location": location or "?:?",
+                  "detail": str(detail or "").replace("\n", " ")[:3000],
+                  "rule": rule or "",
+                  "source": source or ""
               })
 
-          for path in root.rglob("ai_app_static_findings.json"):
-              try:
-                  data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
-              except Exception:
-                  continue
+          def load_all(name):
+              for p in root.rglob(name):
+                  try:
+                      txt = p.read_text(encoding="utf-8", errors="ignore").strip()
+                      if txt:
+                          yield p, json.loads(txt)
+                  except Exception as e:
+                      add("Pipeline / Parser", "UNKNOWN", "Report parser", f"{p}:1", f"No se pudo leer JSON: {e}", "PARSER_ERROR", str(p))
 
-              for item in data.get("findings", []):
-                  add(
-                      item.get("category", "AI / LLM / Agentic"),
-                      item.get("severity", "UNKNOWN"),
-                      item.get("tool", "AI/App Static Analyzer"),
-                      f"{item.get('file','?')}:{item.get('line','?')}",
-                      item.get("message", ""),
-                      item.get("rule", ""),
-                  )
+          for p, data in load_all("ai_app_static_findings.json"):
+              for x in data.get("findings", []):
+                  add(x.get("category","AI / LLM / Agentic"), x.get("severity","UNKNOWN"), x.get("tool","AI/App Static Analyzer"), f"{x.get('file','?')}:{x.get('line','?')}", x.get("message",""), x.get("rule",""), str(p))
 
-          for path in root.rglob("semgrep_ai.json"):
-              try:
-                  data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
-              except Exception:
-                  continue
+          for p, data in load_all("semgrep_ai.json"):
+              for x in data.get("results", []):
+                  e = x.get("extra", {})
+                  add("AI / LLM / Agentic", e.get("severity","UNKNOWN"), "Semgrep AI", f"{x.get('path','?')}:{x.get('start',{}).get('line','?')}", e.get("message",""), x.get("check_id",""), str(p))
 
-              for item in data.get("results", []):
-                  extra = item.get("extra", {})
-                  add(
-                      "AI / LLM / Agentic",
-                      extra.get("severity", "UNKNOWN"),
-                      "Semgrep AI Rules",
-                      f"{item.get('path','?')}:{item.get('start',{}).get('line','?')}",
-                      extra.get("message", ""),
-                      item.get("check_id", ""),
-                  )
+          for p, data in load_all("semgrep.json"):
+              for x in data.get("results", []):
+                  e = x.get("extra", {})
+                  add("Código aplicativo", e.get("severity","UNKNOWN"), "Semgrep OSS", f"{x.get('path','?')}:{x.get('start',{}).get('line','?')}", e.get("message",""), x.get("check_id",""), str(p))
 
-          order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "UNKNOWN": 5}
-          findings.sort(key=lambda f: (order.get(f["severity"], 99), f["category"], f["location"]))
+          for p, data in load_all("codeql_findings.json"):
+              for x in data.get("findings", []):
+                  add(x.get("category","Código aplicativo"), x.get("severity","UNKNOWN"), x.get("tool","CodeQL"), x.get("location","?:?"), x.get("message",""), x.get("rule",""), str(p))
+
+          for p, data in load_all("dependency_policy_findings.json"):
+              for x in data.get("findings", []):
+                  add(x.get("category","Dependencias / Policy"), x.get("severity","UNKNOWN"), "Dependency Policy", f"{x.get('file','?')}:{x.get('line','?')}", x.get("message",""), x.get("rule",""), str(p))
+
+          for p, data in load_all("pip_audit_osv.json"):
+              deps = data.get("dependencies", []) if isinstance(data, dict) else []
+              for dep in deps:
+                  for v in dep.get("vulns", []) or []:
+                      add("Dependencias / SCA", v.get("severity","HIGH"), "pip-audit", f"{dep.get('name','?')}:?", f"{dep.get('name','?')} {dep.get('version','')}: {v.get('id','')} - {v.get('description','')}", v.get("id",""), str(p))
+
+          for p, data in load_all("trivy_results.json"):
+              for r in data.get("Results", []) if isinstance(data, dict) else []:
+                  target = r.get("Target","?")
+                  for v in r.get("Vulnerabilities", []) or []:
+                      add("Dependencias / SCA", v.get("Severity","UNKNOWN"), "Trivy", f"{target}:?", f"{v.get('PkgName','')} {v.get('InstalledVersion','')} - {v.get('VulnerabilityID','')} - {v.get('Title','')}", v.get("VulnerabilityID",""), str(p))
+                  for s in r.get("Secrets", []) or []:
+                      add("Secretos", s.get("Severity","HIGH"), "Trivy", f"{target}:?", s.get("Title","Possible secret"), s.get("RuleID",""), str(p))
+                  for m in r.get("Misconfigurations", []) or []:
+                      cat = "Docker / Contenedores" if "dockerfile" in str(target).lower() else "IaC / Cloud / Config"
+                      add(cat, m.get("Severity","UNKNOWN"), "Trivy", f"{target}:?", f"{m.get('ID','')} - {m.get('Title','')}", m.get("ID",""), str(p))
+
+          for p, data in load_all("gitleaks_report.json"):
+              if isinstance(data, list):
+                  for x in data:
+                      add("Secretos", "HIGH", "Gitleaks", f"{x.get('File','?')}:{x.get('StartLine','?')}", x.get("Description","Possible exposed secret"), x.get("RuleID",""), str(p))
+
+          for p, data in load_all("checkov_results.json"):
+              reports = data if isinstance(data, list) else [data]
+              for rep in reports:
+                  if not isinstance(rep, dict):
+                      continue
+                  for c in rep.get("results", {}).get("failed_checks", []) or []:
+                      fp = c.get("file_path","?")
+                      cat = "Docker / Contenedores" if "dockerfile" in str(fp).lower() else "IaC / Cloud / Config"
+                      lr = c.get("file_line_range") or ["?"]
+                      add(cat, "HIGH", "Checkov", f"{fp}:{lr[0]}", c.get("check_name",""), c.get("check_id",""), str(p))
+
+          for p, data in load_all("hadolint_results.json"):
+              if isinstance(data, list):
+                  for x in data:
+                      add("Docker / Contenedores", x.get("level","warning"), "Hadolint", f"{x.get('file', x.get('filename','Dockerfile'))}:{x.get('line', x.get('lineNumber','?'))}", x.get("message", x.get("description","")), x.get("code",""), str(p))
+
+          for p, data in load_all("ruff_dev_quality_findings.json"):
+              for x in data.get("findings", []) if isinstance(data, dict) else []:
+                  quality.append(x)
+
+          categories = sorted(set([f["category"] for f in findings]) | {"AI / LLM / Agentic","Código aplicativo","Dependencias / SCA","Dependencias / Policy","Secretos","Docker / Contenedores","IaC / Cloud / Config","Pipeline / Parser"})
+          severities = ["CRITICAL","HIGH","MEDIUM","LOW","INFO","UNKNOWN"]
+          table = {c:{s:0 for s in severities} for c in categories}
+          for f in findings:
+              sev = f["severity"] if f["severity"] in severities else "UNKNOWN"
+              table[f["category"]][sev] += 1
+
+          order = {"CRITICAL":0,"HIGH":1,"MEDIUM":2,"LOW":3,"INFO":4,"UNKNOWN":5}
+          findings.sort(key=lambda x: (order.get(x["severity"], 99), x["category"], x["tool"], x["location"]))
 
           lines = []
-          lines.append("REPORTE AI / LLM / AGENTIC")
-          lines.append("=" * 90)
-          lines.append(f"Hallazgos AI/AppSec: {len(findings)}")
+          lines.append("REPORTE CENTRALIZADO DE SEGURIDAD")
+          lines.append("="*90)
           lines.append("")
-          lines.append("HALLAZGOS CON LINEA")
-          lines.append("=" * 90)
+          lines.append("RESUMEN EJECUTIVO")
+          lines.append("-"*90)
+          lines.append(f"Hallazgos totales             : {len(findings)}")
+          lines.append(f"Críticas + Altas              : {len([f for f in findings if f['severity'] in {'CRITICAL','HIGH'}])}")
+          lines.append(f"Hallazgos de calidad Ruff     : {len(quality)}")
+          lines.append("")
+          lines.append("RESUMEN POR CATEGORÍA")
+          lines.append("-"*90)
+          lines.append(f"{'Categoría':35} {'CRITICAL':>8} {'HIGH':>5} {'MEDIUM':>7} {'LOW':>5} {'INFO':>5} {'UNKNOWN':>8}")
+          for c in categories:
+              lines.append(f"{c:35} {table[c]['CRITICAL']:>8} {table[c]['HIGH']:>5} {table[c]['MEDIUM']:>7} {table[c]['LOW']:>5} {table[c]['INFO']:>5} {table[c]['UNKNOWN']:>8}")
+          lines.append("")
+          lines.append("TODOS LOS HALLAZGOS ORDENADOS POR CRITICIDAD")
+          lines.append("="*90)
 
           if not findings:
               lines.append("Sin hallazgos.")
           else:
-              for idx, f in enumerate(findings, 1):
+              for i, f in enumerate(findings, 1):
                   lines.append("")
-                  lines.append(f"{idx}. [{f['severity']}] [{f['category']}] {f['rule']}")
+                  lines.append(f"{i}. [{f['severity']}] [{f['category']}] {f['rule']}")
                   lines.append(f"   Herramienta : {f['tool']}")
-                  lines.append(f"   Linea/Error : {f['location']}")
+                  lines.append(f"   Línea/Error : {f['location']}")
                   lines.append(f"   Detalle     : {f['detail']}")
+                  lines.append(f"   Fuente      : {f['source']}")
 
-          report = output_dir / "REPORTE_AI_SECURITY.txt"
-          report.write_text("\n".join(lines), encoding="utf-8")
-
-          report_json = output_dir / "REPORTE_AI_SECURITY.json"
-          report_json.write_text(json.dumps({"findings": findings}, indent=2, ensure_ascii=False), encoding="utf-8")
-
-          print(report.read_text(encoding="utf-8"))
+          (outdir / "REPORTE_CENTRALIZADO_SEGURIDAD.txt").write_text("\n".join(lines), encoding="utf-8")
+          (outdir / "REPORTE_CENTRALIZADO_SEGURIDAD.json").write_text(json.dumps({"findings": findings, "quality": quality}, indent=2, ensure_ascii=False), encoding="utf-8")
+          print((outdir / "REPORTE_CENTRALIZADO_SEGURIDAD.txt").read_text(encoding="utf-8"))
           PY
 
-      - name: Upload AI report
+      - name: Upload centralized report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-security-report
-          path: ai-security-report
+          name: central-security-report
+          path: central-security-report
           retention-days: 30
