@@ -1,6 +1,6 @@
-name: "Security Pipeline"
+name: Security Pipeline
 
-on:
+"on":
   push:
     branches:
       - main
@@ -25,95 +25,33 @@ env:
 
 jobs:
   security:
-    name: "Strong Security Scan"
+    name: Security scan
     runs-on: ubuntu-latest
     continue-on-error: true
 
     steps:
-      - name: "Checkout repository"
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: "Prepare folders"
+      - name: Prepare folders
         shell: bash
         run: |
           rm -rf security-results
           mkdir -p security-results/reports
           mkdir -p security-results/sarif
 
-      - name: "Detect repository languages"
-        id: detect
-        shell: bash
-        run: |
-          langs=""
-
-          if find . -name "*.py" -not -path "./.git/*" | grep -q .; then
-            langs="${langs},python"
-          fi
-
-          if find . \( -name "*.js" -o -name "*.jsx" -o -name "*.ts" -o -name "*.tsx" \) -not -path "./.git/*" | grep -q .; then
-            langs="${langs},javascript-typescript"
-          fi
-
-          if find . -name "*.java" -not -path "./.git/*" | grep -q .; then
-            langs="${langs},java"
-          fi
-
-          if find . -name "*.go" -not -path "./.git/*" | grep -q .; then
-            langs="${langs},go"
-          fi
-
-          if find . \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.cxx" -o -name "*.h" -o -name "*.hpp" \) -not -path "./.git/*" | grep -q .; then
-            langs="${langs},c-cpp"
-          fi
-
-          if find . -name "*.cs" -not -path "./.git/*" | grep -q .; then
-            langs="${langs},csharp"
-          fi
-
-          langs="${langs#,}"
-          echo "codeql_languages=${langs}" >> "$GITHUB_OUTPUT"
-          echo "Detected CodeQL languages: ${langs}"
-
-      - name: "Set up Python"
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "${{ env.PYTHON_VERSION }}"
+          python-version: "3.11"
 
-      - name: "Install security tools"
+      - name: Install security tools
         shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install semgrep pip-audit ruff checkov
 
-      # ==========================================================
-      # CODEQL OFICIAL
-      # ==========================================================
-
-      - name: "Initialize CodeQL"
-        if: ${{ steps.detect.outputs.codeql_languages != '' }}
-        uses: github/codeql-action/init@v3
-        continue-on-error: true
-        with:
-          languages: "${{ steps.detect.outputs.codeql_languages }}"
-          queries: "security-extended,security-and-quality"
-
-      - name: "CodeQL Autobuild"
-        if: ${{ steps.detect.outputs.codeql_languages != '' }}
-        uses: github/codeql-action/autobuild@v3
-        continue-on-error: true
-
-      - name: "CodeQL Analyze"
-        if: ${{ steps.detect.outputs.codeql_languages != '' }}
-        uses: github/codeql-action/analyze@v3
-        continue-on-error: true
-        with:
-          category: "/language:auto"
-
-      # ==========================================================
-      # REGLAS AI / LLM / AGENTIC GENÃ‰RICAS
-      # ==========================================================
-
-      - name: "Create generic AI AppSec Semgrep rules"
+      - name: Create AI AppSec rules
         shell: bash
         run: |
           cat > ai-appsec-rules.yml <<'EOF'
@@ -159,7 +97,7 @@ jobs:
                 - pattern: $VECTORSTORE.as_retriever(...)
 
             - id: ai.agent-tool-execution-risk
-              message: AI agent/tool execution detected. Review whether the model can trigger filesystem, shell, network, database or privileged operations.
+              message: AI agent or tool execution detected. Review whether the model can trigger filesystem, shell, network, database or privileged operations.
               severity: ERROR
               languages:
                 - python
@@ -189,7 +127,7 @@ jobs:
                 - pattern: exec($CMD)
 
             - id: ai.sensitive-keyword-security-control
-              message: Keyword filtering appears to be used as a security boundary. This is usually bypassable in AI/LLM applications.
+              message: Keyword filtering appears to be used as a security boundary. This is usually bypassable in AI and LLM applications.
               severity: WARNING
               languages:
                 - python
@@ -213,7 +151,7 @@ jobs:
                 - pattern: load_dotenv(...)
 
             - id: ai.unsafe-document-loader
-              message: Document parsing/loader detected. Validate uploaded files, file type, size, sandboxing and malicious document handling.
+              message: Document parsing or loader detected. Validate uploaded files, file type, size, sandboxing and malicious document handling.
               severity: WARNING
               languages:
                 - python
@@ -226,7 +164,7 @@ jobs:
                 - pattern: Docx2txtLoader(...)
 
             - id: ai.embedding-sensitive-data-risk
-              message: Embeddings/vector storage detected. Check whether secrets, PII or tenant data can be embedded or retrieved across authorization boundaries.
+              message: Embeddings or vector storage detected. Check whether secrets, PII or tenant data can be embedded or retrieved across authorization boundaries.
               severity: WARNING
               languages:
                 - python
@@ -247,13 +185,13 @@ jobs:
                 - pattern: $APP.run(..., debug=True, ...)
 
             - id: web.flask-public-host
-              message: Flask app exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicTRYhra8A$ . Confirm intended exposure, auth and network controls.
+              message: Flask app exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!5b35aKhLtYyuK39XIB8jHTv1tQG5gkH-pW-Gec_b4WJtm4gGCCbEJQHSPe5exZDTYYSwlPbrwk2UXtByPJ_jN4JaT6UOdA$ . Confirm intended exposure, auth and network controls.
               severity: WARNING
               languages:
                 - python
               pattern-either:
-                - pattern: app.run(..., host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicTRYhra8A$ ", ...)
-                - pattern: $APP.run(..., host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicTRYhra8A$ ", ...)
+                - pattern: app.run(..., host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!5b35aKhLtYyuK39XIB8jHTv1tQG5gkH-pW-Gec_b4WJtm4gGCCbEJQHSPe5exZDTYYSwlPbrwk2UXtByPJ_jN4JaT6UOdA$ ", ...)
+                - pattern: $APP.run(..., host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!5b35aKhLtYyuK39XIB8jHTv1tQG5gkH-pW-Gec_b4WJtm4gGCCbEJQHSPe5exZDTYYSwlPbrwk2UXtByPJ_jN4JaT6UOdA$ ", ...)
 
             - id: web.file-upload-risk
               message: File upload detected. Validate extension, MIME type, size, storage path, malware scanning and path traversal controls.
@@ -292,11 +230,7 @@ jobs:
                 - pattern: compile(...)
           EOF
 
-      # ==========================================================
-      # SEMGREP
-      # ==========================================================
-
-      - name: "Semgrep general security JSON"
+      - name: Semgrep general security JSON
         shell: bash
         run: |
           semgrep scan \
@@ -320,7 +254,7 @@ jobs:
             --output security-results/reports/semgrep.json \
             . || true
 
-      - name: "Semgrep general security SARIF"
+      - name: Semgrep general security SARIF
         shell: bash
         run: |
           semgrep scan \
@@ -344,7 +278,7 @@ jobs:
             --output security-results/sarif/semgrep.sarif \
             . || true
 
-      - name: "Semgrep AI AppSec JSON"
+      - name: Semgrep AI AppSec JSON
         shell: bash
         run: |
           semgrep scan \
@@ -360,7 +294,7 @@ jobs:
             --output security-results/reports/semgrep-ai.json \
             . || true
 
-      - name: "Semgrep AI AppSec SARIF"
+      - name: Semgrep AI AppSec SARIF
         shell: bash
         run: |
           semgrep scan \
@@ -376,11 +310,7 @@ jobs:
             --output security-results/sarif/semgrep-ai.sarif \
             . || true
 
-      # ==========================================================
-      # DEPENDENCIAS / SCA
-      # ==========================================================
-
-      - name: "Python dependency scan - pip-audit"
+      - name: Python dependency scan pip-audit
         shell: bash
         run: |
           if [ -f requirements.txt ]; then
@@ -391,7 +321,7 @@ jobs:
             echo '{"dependencies":[]}' > security-results/reports/pip-audit.json
           fi
 
-      - name: "Node dependency scan - npm audit"
+      - name: Node dependency scan npm audit
         shell: bash
         run: |
           if [ -f package-lock.json ]; then
@@ -400,49 +330,37 @@ jobs:
             echo '{}' > security-results/reports/npm-audit.json
           fi
 
-      # ==========================================================
-      # SECRETOS
-      # ==========================================================
-
-      - name: "Gitleaks secrets scan"
+      - name: Gitleaks secrets scan
         uses: gitleaks/gitleaks-action@v2
         continue-on-error: true
         env:
-          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ==========================================================
-      # TRIVY
-      # ==========================================================
-
-      - name: "Trivy SARIF"
+      - name: Trivy SARIF
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
           scan-type: fs
           scan-ref: "."
-          scanners: "vuln,secret,misconfig"
-          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: true
           format: sarif
           output: security-results/sarif/trivy.sarif
 
-      - name: "Trivy JSON"
+      - name: Trivy JSON
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
           scan-type: fs
           scan-ref: "."
-          scanners: "vuln,secret,misconfig"
-          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: true
           format: json
           output: security-results/reports/trivy.json
 
-      # ==========================================================
-      # CHECKOV
-      # ==========================================================
-
-      - name: "Checkov JSON"
+      - name: Checkov JSON
         shell: bash
         run: |
           checkov -d . \
@@ -458,7 +376,7 @@ jobs:
             --output json \
             > security-results/reports/checkov.json || true
 
-      - name: "Checkov SARIF"
+      - name: Checkov SARIF
         shell: bash
         run: |
           checkov -d . \
@@ -474,11 +392,7 @@ jobs:
             --output sarif \
             > security-results/sarif/checkov.sarif || true
 
-      # ==========================================================
-      # RUFF
-      # ==========================================================
-
-      - name: "Ruff quality scan"
+      - name: Ruff quality scan
         shell: bash
         run: |
           if find . -name "*.py" -not -path "./.git/*" | grep -q .; then
@@ -496,11 +410,7 @@ jobs:
             echo "[]" > security-results/reports/ruff.json
           fi
 
-      # ==========================================================
-      # SARIF VÃLIDO
-      # ==========================================================
-
-      - name: "Ensure SARIF files are valid"
+      - name: Ensure SARIF files are valid
         shell: bash
         run: |
           for file in semgrep.sarif semgrep-ai.sarif trivy.sarif checkov.sarif; do
@@ -517,53 +427,44 @@ jobs:
             python -c "import json, pathlib; p=pathlib.Path('$path'); json.loads(p.read_text(errors='ignore'))" || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"empty","rules":[]}},"results":[]}]}' > "$path"
           done
 
-      # ==========================================================
-      # SUBIR SARIF
-      # ==========================================================
-
-      - name: "Upload Semgrep SARIF"
+      - name: Upload Semgrep SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: security-results/sarif/semgrep.sarif
           category: semgrep-general
 
-      - name: "Upload Semgrep AI SARIF"
+      - name: Upload Semgrep AI SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: security-results/sarif/semgrep-ai.sarif
           category: semgrep-ai-appsec
 
-      - name: "Upload Trivy SARIF"
+      - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: security-results/sarif/trivy.sarif
           category: trivy
 
-      - name: "Upload Checkov SARIF"
+      - name: Upload Checkov SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: security-results/sarif/checkov.sarif
           category: checkov
 
-      # ==========================================================
-      # REPORTE CENTRALIZADO
-      # ==========================================================
-
-      - name: "Build centralized security report"
+      - name: Build centralized security report
         if: always()
         shell: bash
         run: |
-          cat > https://urldefense.com/v3/__http://build_security_report.py__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicT9dTjvVw$  <<'PY'
+          python - <<'PY'
           import json
           from pathlib import Path
 
           base = Path("security-results/reports")
           out = Path("security-results/REPORTE_CENTRALIZADO_SEGURIDAD.txt")
-
           findings = []
 
           def normalize_sev(sev):
@@ -595,7 +496,7 @@ jobs:
                       if txt:
                           return json.loads(txt)
               except Exception as e:
-                  add("Pipeline / Parser", "UNKNOWN", "Report parser", https://urldefense.com/v3/__http://path.name__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicRm--i_kw$ , f"No se pudo leer JSON: {e}")
+                  add("Pipeline / Parser", "UNKNOWN", "Report parser", https://urldefense.com/v3/__http://path.name__;!!P110LumUDw!5b35aKhLtYyuK39XIB8jHTv1tQG5gkH-pW-Gec_b4WJtm4gGCCbEJQHSPe5exZDTYYSwlPbrwk2UXtByPJ_jN4KXzGzAxg$ , f"No se pudo leer JSON: {e}")
               return None
 
           def semgrep_category(check_id):
@@ -603,17 +504,14 @@ jobs:
               if cid.startswith("ai.") or "llm" in cid or "rag" in cid or "agent" in cid or "embedding" in cid:
                   return "AI / LLM / Agentic"
               if cid.startswith("web.") or "flask" in cid or "redirect" in cid:
-                  return "CÃ³digo aplicativo"
+                  return "Codigo aplicativo"
               if cid.startswith("code."):
-                  return "CÃ³digo aplicativo"
+                  return "Codigo aplicativo"
               if "secret" in cid:
                   return "Secretos"
-              return "CÃ³digo aplicativo"
+              return "Codigo aplicativo"
 
-          for filename, tool in [
-              ("semgrep.json", "Semgrep OSS"),
-              ("semgrep-ai.json", "Semgrep AI AppSec")
-          ]:
+          for filename, tool in [("semgrep.json", "Semgrep OSS"), ("semgrep-ai.json", "Semgrep AI AppSec")]:
               data = read_json(base / filename)
               if data:
                   for r in data.get("results", []):
@@ -621,69 +519,30 @@ jobs:
                       extra = r.get("extra", {})
                       path = r.get("path", "?")
                       line = r.get("start", {}).get("line", "?")
-                      add(
-                          semgrep_category(check_id),
-                          extra.get("severity", "UNKNOWN"),
-                          tool,
-                          f"{path}:{line}",
-                          f"{check_id} - {extra.get('message','')}"
-                      )
+                      add(semgrep_category(check_id), extra.get("severity", "UNKNOWN"), tool, f"{path}:{line}", f"{check_id} - {extra.get('message','')}")
 
           data = read_json(base / "pip-audit.json")
           if data:
               for dep in data.get("dependencies", []):
                   for v in dep.get("vulns", []):
-                      add(
-                          "Dependencias / Python",
-                          "HIGH",
-                          "pip-audit",
-                          dep.get("name", "?"),
-                          f"{v.get('id','')} - {v.get('description','')}"
-                      )
+                      add("Dependencias Python", "HIGH", "pip-audit", dep.get("name", "?"), f"{v.get('id','')} - {v.get('description','')}")
 
           data = read_json(base / "npm-audit.json")
           if data and isinstance(data, dict):
               for name, v in data.get("vulnerabilities", {}).items():
-                  add(
-                      "Dependencias / Node",
-                      v.get("severity", "UNKNOWN"),
-                      "npm audit",
-                      name,
-                      v.get("title", "Dependency vulnerability")
-                  )
+                  add("Dependencias Node", v.get("severity", "UNKNOWN"), "npm audit", name, v.get("title", "Dependency vulnerability"))
 
           data = read_json(base / "trivy.json")
           if data:
               for result in data.get("Results", []) or []:
                   target = result.get("Target", "?")
-
                   for v in result.get("Vulnerabilities", []) or []:
-                      add(
-                          "Dependencias / SCA",
-                          v.get("Severity", "UNKNOWN"),
-                          "Trivy",
-                          target,
-                          f"{v.get('PkgName','')} {v.get('InstalledVersion','')} - {v.get('VulnerabilityID','')} - {v.get('Title','')}"
-                      )
-
+                      add("Dependencias SCA", v.get("Severity", "UNKNOWN"), "Trivy", target, f"{v.get('PkgName','')} {v.get('InstalledVersion','')} - {v.get('VulnerabilityID','')} - {v.get('Title','')}")
                   for s in result.get("Secrets", []) or []:
-                      add(
-                          "Secretos",
-                          s.get("Severity", "HIGH"),
-                          "Trivy",
-                          target,
-                          s.get("Title", "Possible secret")
-                      )
-
+                      add("Secretos", s.get("Severity", "HIGH"), "Trivy", target, s.get("Title", "Possible secret"))
                   for m in result.get("Misconfigurations", []) or []:
                       category = "Docker / Contenedores" if "dockerfile" in target.lower() else "IaC / Cloud / Config"
-                      add(
-                          category,
-                          m.get("Severity", "UNKNOWN"),
-                          "Trivy",
-                          target,
-                          f"{m.get('ID','')} - {m.get('Title','')}"
-                      )
+                      add(category, m.get("Severity", "UNKNOWN"), "Trivy", target, f"{m.get('ID','')} - {m.get('Title','')}")
 
           data = read_json(base / "checkov.json")
           if data:
@@ -692,30 +551,23 @@ jobs:
                   for r in rep.get("results", {}).get("failed_checks", []) or []:
                       file_path = r.get("file_path", "?")
                       category = "Docker / Contenedores" if "dockerfile" in file_path.lower() else "IaC / Cloud / Config"
-                      lines = r.get("file_line_range") or ["?"]
-                      add(
-                          category,
-                          "HIGH",
-                          "Checkov",
-                          f"{file_path}:{lines[0]}",
-                          f"{r.get('check_id','')} - {r.get('check_name','')}"
-                      )
+                      lines_range = r.get("file_line_range") or ["?"]
+                      add(category, "HIGH", "Checkov", f"{file_path}:{lines_range[0]}", f"{r.get('check_id','')} - {r.get('check_name','')}")
 
           ruff = read_json(base / "ruff.json")
           quality = ruff if isinstance(ruff, list) else []
 
           categories = [
               "AI / LLM / Agentic",
-              "CÃ³digo aplicativo",
-              "Dependencias / Python",
-              "Dependencias / Node",
-              "Dependencias / SCA",
+              "Codigo aplicativo",
+              "Dependencias Python",
+              "Dependencias Node",
+              "Dependencias SCA",
               "Secretos",
               "Docker / Contenedores",
               "IaC / Cloud / Config",
               "Pipeline / Parser"
           ]
-
           severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"]
           table = {c: {s: 0 for s in severities} for c in categories}
 
@@ -724,15 +576,7 @@ jobs:
               sev = f["severity"] if f["severity"] in severities else "UNKNOWN"
               table[f["category"]][sev] += 1
 
-          order = {
-              "CRITICAL": 0,
-              "HIGH": 1,
-              "MEDIUM": 2,
-              "LOW": 3,
-              "INFO": 4,
-              "UNKNOWN": 5
-          }
-
+          order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "UNKNOWN": 5}
           findings.sort(key=lambda x: order.get(x["severity"], 99))
           critical_high = [f for f in findings if f["severity"] in ["CRITICAL", "HIGH"]]
 
@@ -743,24 +587,23 @@ jobs:
           lines.append("RESUMEN EJECUTIVO")
           lines.append("-" * 90)
           lines.append(f"Vulnerabilidades totales       : {len(findings)}")
-          lines.append(f"CrÃ­ticas + Altas              : {len(critical_high)}")
+          lines.append(f"Criticas + Altas              : {len(critical_high)}")
           lines.append(f"Hallazgos de calidad Ruff     : {len(quality)}")
           lines.append("")
-          lines.append("RESUMEN POR CATEGORÃA")
+          lines.append("RESUMEN POR CATEGORIA")
           lines.append("-" * 90)
-          lines.append(f"{'CategorÃ­a':35} {'CRITICAL':>8} {'HIGH':>5} {'MEDIUM':>7} {'LOW':>5} {'INFO':>5} {'UNKNOWN':>8}")
+          lines.append(f"{'Categoria':35} {'CRITICAL':>8} {'HIGH':>5} {'MEDIUM':>7} {'LOW':>5} {'INFO':>5} {'UNKNOWN':>8}")
 
           for cat in categories:
-              if cat in table:
-                  lines.append(
-                      f"{cat:35} "
-                      f"{table[cat]['CRITICAL']:>8} "
-                      f"{table[cat]['HIGH']:>5} "
-                      f"{table[cat]['MEDIUM']:>7} "
-                      f"{table[cat]['LOW']:>5} "
-                      f"{table[cat]['INFO']:>5} "
-                      f"{table[cat]['UNKNOWN']:>8}"
-                  )
+              lines.append(
+                  f"{cat:35} "
+                  f"{table[cat]['CRITICAL']:>8} "
+                  f"{table[cat]['HIGH']:>5} "
+                  f"{table[cat]['MEDIUM']:>7} "
+                  f"{table[cat]['LOW']:>5} "
+                  f"{table[cat]['INFO']:>5} "
+                  f"{table[cat]['UNKNOWN']:>8}"
+              )
 
           lines.append("")
           lines.append("VULNERABILIDADES ORDENADAS POR CRITICIDAD")
@@ -771,27 +614,25 @@ jobs:
               lines.append("")
               lines.append(f"{sev} ({len(group)})")
               lines.append("-" * 90)
-
               if not group:
                   lines.append("Sin hallazgos.")
               else:
                   for i, f in enumerate(group, 1):
                       lines.append(f"{i}. [{f['category']}]")
                       lines.append(f"   Herramienta : {f['tool']}")
-                      lines.append(f"   UbicaciÃ³n   : {f['location']}")
+                      lines.append(f"   Ubicacion   : {f['location']}")
                       lines.append(f"   Detalle     : {f['detail']}")
                       lines.append("")
 
           lines.append("")
           lines.append("CALIDAD DE DESARROLLO / RUFF")
           lines.append("=" * 90)
-
           if not quality:
               lines.append("Sin hallazgos.")
           else:
               for i, q in enumerate(quality, 1):
                   lines.append(f"{i}. {q.get('code','?')}")
-                  lines.append(f"   UbicaciÃ³n: {q.get('filename','?')}:{q.get('location',{}).get('row','?')}")
+                  lines.append(f"   Ubicacion: {q.get('filename','?')}:{q.get('location',{}).get('row','?')}")
                   lines.append(f"   Detalle  : {q.get('message','')}")
                   lines.append("")
 
@@ -799,9 +640,7 @@ jobs:
           print(out.read_text(encoding="utf-8"))
           PY
 
-          python https://urldefense.com/v3/__http://build_security_report.py__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicT9dTjvVw$ 
-
-      - name: "Upload security artifacts"
+      - name: Upload security artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
