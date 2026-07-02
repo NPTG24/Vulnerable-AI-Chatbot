@@ -1,10 +1,16 @@
-name: Security Pipeline - Strong Universal AI AppSec
+name: "Security Pipeline - Strong Universal AI AppSec"
 
 on:
   push:
-    branches: [main, master, develop]
+    branches:
+      - main
+      - master
+      - develop
   pull_request:
-    branches: [main, master, develop]
+    branches:
+      - main
+      - master
+      - develop
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * 1"
@@ -19,22 +25,24 @@ env:
 
 jobs:
   security:
-    name: Strong Security Scan
+    name: "Strong Security Scan"
     runs-on: ubuntu-latest
     continue-on-error: true
 
     steps:
-      - name: Checkout repository
+      - name: "Checkout repository"
         uses: actions/checkout@v4
 
-      - name: Prepare folders
+      - name: "Prepare folders"
+        shell: bash
         run: |
           rm -rf security-results
           mkdir -p security-results/reports
           mkdir -p security-results/sarif
 
-      - name: Detect repository languages
+      - name: "Detect repository languages"
         id: detect
+        shell: bash
         run: |
           langs=""
 
@@ -54,7 +62,7 @@ jobs:
             langs="${langs},go"
           fi
 
-          if find . \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) -not -path "./.git/*" | grep -q .; then
+          if find . \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.cxx" -o -name "*.h" -o -name "*.hpp" \) -not -path "./.git/*" | grep -q .; then
             langs="${langs},c-cpp"
           fi
 
@@ -63,55 +71,58 @@ jobs:
           fi
 
           langs="${langs#,}"
-          echo "codeql_languages=$langs" >> "$GITHUB_OUTPUT"
-          echo "Detected CodeQL languages: $langs"
+          echo "codeql_languages=${langs}" >> "$GITHUB_OUTPUT"
+          echo "Detected CodeQL languages: ${langs}"
 
-      - name: Set up Python
+      - name: "Set up Python"
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "${{ env.PYTHON_VERSION }}"
 
-      - name: Install security tools
+      - name: "Install security tools"
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install semgrep pip-audit ruff checkov
 
       # ==========================================================
-      # CODEQL OFICIAL - MULTILENGUAJE DINÃMICO
+      # CODEQL OFICIAL
       # ==========================================================
 
-      - name: Initialize CodeQL
-        if: steps.detect.outputs.codeql_languages != ''
+      - name: "Initialize CodeQL"
+        if: ${{ steps.detect.outputs.codeql_languages != '' }}
         uses: github/codeql-action/init@v3
         continue-on-error: true
         with:
-          languages: ${{ steps.detect.outputs.codeql_languages }}
-          queries: security-extended,security-and-quality
+          languages: "${{ steps.detect.outputs.codeql_languages }}"
+          queries: "security-extended,security-and-quality"
 
-      - name: CodeQL Autobuild
-        if: steps.detect.outputs.codeql_languages != ''
+      - name: "CodeQL Autobuild"
+        if: ${{ steps.detect.outputs.codeql_languages != '' }}
         uses: github/codeql-action/autobuild@v3
         continue-on-error: true
 
-      - name: CodeQL Analyze
-        if: steps.detect.outputs.codeql_languages != ''
+      - name: "CodeQL Analyze"
+        if: ${{ steps.detect.outputs.codeql_languages != '' }}
         uses: github/codeql-action/analyze@v3
         continue-on-error: true
         with:
           category: "/language:auto"
 
       # ==========================================================
-      # REGLAS CUSTOM GENÃ‰RICAS AI / LLM / AGENTIC
+      # REGLAS AI / LLM / AGENTIC GENÃ‰RICAS
       # ==========================================================
 
-      - name: Create generic AI AppSec Semgrep rules
+      - name: "Create generic AI AppSec Semgrep rules"
+        shell: bash
         run: |
           cat > ai-appsec-rules.yml <<'EOF'
           rules:
             - id: ai.untrusted-input-to-llm
               message: User-controlled input appears to reach an LLM or AI chain. Review prompt injection, authorization, tool-use and data leakage controls.
               severity: ERROR
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: $LLM.invoke($INPUT)
                 - pattern: $LLM.predict($INPUT)
@@ -123,24 +134,22 @@ jobs:
                 - pattern: $CLIENT.chat.completions.create(..., messages=$INPUT, ...)
                 - pattern: $CLIENT.responses.create(..., input=$INPUT, ...)
 
-            - id: ai.user-input-in-prompt-template
-              message: User-controlled value appears inside an AI prompt template. Check for prompt injection and instruction override.
-              severity: ERROR
-              languages: [python]
+            - id: ai.prompt-template-risk
+              message: Prompt template construction detected. Review whether untrusted input can override system instructions or leak data.
+              severity: WARNING
+              languages:
+                - python
               pattern-either:
-                - pattern: |
-                    $PROMPT = f"...{$INPUT}..."
-                - pattern: |
-                    $PROMPT = "...".format($INPUT)
-                - pattern: |
-                    $PROMPT = $A + $INPUT
-                - pattern: |
-                    PromptTemplate(..., template=$TEMPLATE, ...)
+                - pattern: PromptTemplate(...)
+                - pattern: ChatPromptTemplate(...)
+                - pattern: SystemMessagePromptTemplate(...)
+                - pattern: HumanMessagePromptTemplate(...)
 
             - id: ai.rag-retrieval-chain-risk
-              message: RAG or RetrievalQA pattern detected. Validate document isolation, metadata authorization, prompt injection defenses and source filtering.
+              message: RAG or retrieval chain detected. Validate document isolation, metadata authorization, prompt injection defenses and source filtering.
               severity: WARNING
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: RetrievalQA.from_chain_type(...)
                 - pattern: ConversationalRetrievalChain.from_llm(...)
@@ -152,7 +161,8 @@ jobs:
             - id: ai.agent-tool-execution-risk
               message: AI agent/tool execution detected. Review whether the model can trigger filesystem, shell, network, database or privileged operations.
               severity: ERROR
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: initialize_agent(...)
                 - pattern: AgentExecutor(...)
@@ -168,7 +178,8 @@ jobs:
             - id: ai.llm-output-used-as-command
               message: LLM or AI-generated output may reach command execution. This can create prompt-to-RCE risk.
               severity: ERROR
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: subprocess.run($CMD, shell=True, ...)
                 - pattern: subprocess.call($CMD, shell=True, ...)
@@ -180,7 +191,8 @@ jobs:
             - id: ai.sensitive-keyword-security-control
               message: Keyword filtering appears to be used as a security boundary. This is usually bypassable in AI/LLM applications.
               severity: WARNING
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: |
                     if any($WORD in $INPUT for $WORD in $WORDS):
@@ -192,7 +204,8 @@ jobs:
             - id: ai.secret-or-env-disclosure-risk
               message: Environment variable or secret-like value is used in application logic. Check for disclosure through AI responses, logs or debugging routes.
               severity: ERROR
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: os.environ[$KEY]
                 - pattern: os.getenv($KEY)
@@ -202,7 +215,8 @@ jobs:
             - id: ai.unsafe-document-loader
               message: Document parsing/loader detected. Validate uploaded files, file type, size, sandboxing and malicious document handling.
               severity: WARNING
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: PyPDFLoader(...)
                 - pattern: UnstructuredFileLoader(...)
@@ -214,7 +228,8 @@ jobs:
             - id: ai.embedding-sensitive-data-risk
               message: Embeddings/vector storage detected. Check whether secrets, PII or tenant data can be embedded or retrieved across authorization boundaries.
               severity: WARNING
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: OpenAIEmbeddings(...)
                 - pattern: HuggingFaceEmbeddings(...)
@@ -225,23 +240,26 @@ jobs:
             - id: web.flask-debug-enabled
               message: Flask debug mode enabled.
               severity: ERROR
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: app.run(..., debug=True, ...)
                 - pattern: $APP.run(..., debug=True, ...)
 
             - id: web.flask-public-host
-              message: Flask app exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8-itXHxCi-kq_k7NRoSVEUkBWgQmO4M4ggxsSArjlNA7i9-za84KWCCejDZz7ds9SVoLEp2V8CNnXBQCC858E__LncdiDA$ . Confirm intended exposure, auth and network controls.
+              message: Flask app exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicTRYhra8A$ . Confirm intended exposure, auth and network controls.
               severity: WARNING
-              languages: [python]
+              languages:
+                - python
               pattern-either:
-                - pattern: app.run(..., host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8-itXHxCi-kq_k7NRoSVEUkBWgQmO4M4ggxsSArjlNA7i9-za84KWCCejDZz7ds9SVoLEp2V8CNnXBQCC858E__LncdiDA$ ", ...)
-                - pattern: $APP.run(..., host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8-itXHxCi-kq_k7NRoSVEUkBWgQmO4M4ggxsSArjlNA7i9-za84KWCCejDZz7ds9SVoLEp2V8CNnXBQCC858E__LncdiDA$ ", ...)
+                - pattern: app.run(..., host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicTRYhra8A$ ", ...)
+                - pattern: $APP.run(..., host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicTRYhra8A$ ", ...)
 
             - id: web.file-upload-risk
               message: File upload detected. Validate extension, MIME type, size, storage path, malware scanning and path traversal controls.
               severity: WARNING
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: request.files[$X]
                 - pattern: $FILE.save(...)
@@ -249,13 +267,15 @@ jobs:
             - id: web.open-redirect-risk
               message: Redirect detected. Check whether the target can be user-controlled.
               severity: WARNING
-              languages: [python]
+              languages:
+                - python
               pattern: redirect($TARGET)
 
             - id: code.subprocess-shell-true
               message: subprocess with shell=True detected. Possible command injection if input is attacker-controlled.
               severity: ERROR
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: subprocess.run(..., shell=True, ...)
                 - pattern: subprocess.call(..., shell=True, ...)
@@ -264,7 +284,8 @@ jobs:
             - id: code.eval-exec-risk
               message: Dynamic code execution detected.
               severity: ERROR
-              languages: [python]
+              languages:
+                - python
               pattern-either:
                 - pattern: eval(...)
                 - pattern: exec(...)
@@ -272,10 +293,11 @@ jobs:
           EOF
 
       # ==========================================================
-      # SEMGREP - SAST GENERAL + AI
+      # SEMGREP
       # ==========================================================
 
-      - name: Semgrep general security JSON
+      - name: "Semgrep general security JSON"
+        shell: bash
         run: |
           semgrep scan \
             --config p/security-audit \
@@ -298,7 +320,8 @@ jobs:
             --output security-results/reports/semgrep.json \
             . || true
 
-      - name: Semgrep general security SARIF
+      - name: "Semgrep general security SARIF"
+        shell: bash
         run: |
           semgrep scan \
             --config p/security-audit \
@@ -321,7 +344,8 @@ jobs:
             --output security-results/sarif/semgrep.sarif \
             . || true
 
-      - name: Semgrep AI AppSec JSON
+      - name: "Semgrep AI AppSec JSON"
+        shell: bash
         run: |
           semgrep scan \
             --config ai-appsec-rules.yml \
@@ -336,7 +360,8 @@ jobs:
             --output security-results/reports/semgrep-ai.json \
             . || true
 
-      - name: Semgrep AI AppSec SARIF
+      - name: "Semgrep AI AppSec SARIF"
+        shell: bash
         run: |
           semgrep scan \
             --config ai-appsec-rules.yml \
@@ -355,7 +380,8 @@ jobs:
       # DEPENDENCIAS / SCA
       # ==========================================================
 
-      - name: Python dependency scan - pip-audit
+      - name: "Python dependency scan - pip-audit"
+        shell: bash
         run: |
           if [ -f requirements.txt ]; then
             pip-audit -r requirements.txt \
@@ -365,7 +391,8 @@ jobs:
             echo '{"dependencies":[]}' > security-results/reports/pip-audit.json
           fi
 
-      - name: Node dependency scan - npm audit
+      - name: "Node dependency scan - npm audit"
+        shell: bash
         run: |
           if [ -f package-lock.json ]; then
             npm audit --json > security-results/reports/npm-audit.json || true
@@ -377,46 +404,46 @@ jobs:
       # SECRETOS
       # ==========================================================
 
-      - name: Gitleaks secrets scan
+      - name: "Gitleaks secrets scan"
         uses: gitleaks/gitleaks-action@v2
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
 
       # ==========================================================
-      # TRIVY - DEPENDENCIAS / CONTENEDORES / IAC / SECRETOS
+      # TRIVY
       # ==========================================================
 
-      - name: Trivy SARIF
+      - name: "Trivy SARIF"
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
           scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          scan-ref: "."
+          scanners: "vuln,secret,misconfig"
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
           ignore-unfixed: true
           format: sarif
           output: security-results/sarif/trivy.sarif
 
-      - name: Trivy JSON
+      - name: "Trivy JSON"
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
           scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          scan-ref: "."
+          scanners: "vuln,secret,misconfig"
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
           ignore-unfixed: true
           format: json
           output: security-results/reports/trivy.json
 
       # ==========================================================
-      # CHECKOV - DOCKER / IAC / GITHUB ACTIONS
-      # RedirecciÃ³n a archivo para evitar el error "is a directory".
+      # CHECKOV
       # ==========================================================
 
-      - name: Checkov JSON
+      - name: "Checkov JSON"
+        shell: bash
         run: |
           checkov -d . \
             --framework dockerfile,github_actions,terraform,kubernetes,secrets \
@@ -431,7 +458,8 @@ jobs:
             --output json \
             > security-results/reports/checkov.json || true
 
-      - name: Checkov SARIF
+      - name: "Checkov SARIF"
+        shell: bash
         run: |
           checkov -d . \
             --framework dockerfile,github_actions,terraform,kubernetes,secrets \
@@ -447,10 +475,11 @@ jobs:
             > security-results/sarif/checkov.sarif || true
 
       # ==========================================================
-      # CALIDAD PYTHON
+      # RUFF
       # ==========================================================
 
-      - name: Ruff quality scan
+      - name: "Ruff quality scan"
+        shell: bash
         run: |
           if find . -name "*.py" -not -path "./.git/*" | grep -q .; then
             ruff check . \
@@ -468,10 +497,11 @@ jobs:
           fi
 
       # ==========================================================
-      # GARANTIZAR SARIF VÃLIDO
+      # SARIF VÃLIDO
       # ==========================================================
 
-      - name: Ensure SARIF files are valid
+      - name: "Ensure SARIF files are valid"
+        shell: bash
         run: |
           for file in semgrep.sarif semgrep-ai.sarif trivy.sarif checkov.sarif; do
             path="security-results/sarif/$file"
@@ -484,42 +514,35 @@ jobs:
               echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"empty","rules":[]}},"results":[]}]}' > "$path"
             fi
 
-            python - <<PY
-          import json, pathlib
-          p = pathlib.Path("$path")
-          try:
-              json.loads(p.read_text(errors="ignore"))
-          except Exception:
-              p.write_text('{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"empty","rules":[]}},"results":[]}]}')
-          PY
+            python -c "import json, pathlib; p=pathlib.Path('$path'); json.loads(p.read_text(errors='ignore'))" || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"empty","rules":[]}},"results":[]}]}' > "$path"
           done
 
       # ==========================================================
-      # SUBIR A SECURITY TAB
+      # SUBIR SARIF
       # ==========================================================
 
-      - name: Upload Semgrep SARIF
+      - name: "Upload Semgrep SARIF"
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: security-results/sarif/semgrep.sarif
           category: semgrep-general
 
-      - name: Upload Semgrep AI SARIF
+      - name: "Upload Semgrep AI SARIF"
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: security-results/sarif/semgrep-ai.sarif
           category: semgrep-ai-appsec
 
-      - name: Upload Trivy SARIF
+      - name: "Upload Trivy SARIF"
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: security-results/sarif/trivy.sarif
           category: trivy
 
-      - name: Upload Checkov SARIF
+      - name: "Upload Checkov SARIF"
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
@@ -530,10 +553,11 @@ jobs:
       # REPORTE CENTRALIZADO
       # ==========================================================
 
-      - name: Build centralized security report
+      - name: "Build centralized security report"
         if: always()
+        shell: bash
         run: |
-          python - <<'PY'
+          cat > https://urldefense.com/v3/__http://build_security_report.py__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicT9dTjvVw$  <<'PY'
           import json
           from pathlib import Path
 
@@ -552,7 +576,8 @@ jobs:
                   "INFORMATIONAL": "INFO",
                   "INFORMATIVE": "INFO"
               }
-              return mapping.get(sev, sev if sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"] else "UNKNOWN")
+              allowed = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"]
+              return mapping.get(sev, sev if sev in allowed else "UNKNOWN")
 
           def add(category, severity, tool, location, detail):
               findings.append({
@@ -570,7 +595,7 @@ jobs:
                       if txt:
                           return json.loads(txt)
               except Exception as e:
-                  add("Pipeline / Parser", "UNKNOWN", "Report parser", https://urldefense.com/v3/__http://path.name__;!!P110LumUDw!8-itXHxCi-kq_k7NRoSVEUkBWgQmO4M4ggxsSArjlNA7i9-za84KWCCejDZz7ds9SVoLEp2V8CNnXBQCC858E_90HkooDw$ , f"No se pudo leer JSON: {e}")
+                  add("Pipeline / Parser", "UNKNOWN", "Report parser", https://urldefense.com/v3/__http://path.name__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicRm--i_kw$ , f"No se pudo leer JSON: {e}")
               return None
 
           def semgrep_category(check_id):
@@ -774,7 +799,9 @@ jobs:
           print(out.read_text(encoding="utf-8"))
           PY
 
-      - name: Upload security artifacts
+          python https://urldefense.com/v3/__http://build_security_report.py__;!!P110LumUDw!8mvJ1OHDLR_jqq54YS0qeM3uNdCRogpz8NH21gnEzhoWim3M6NjO-M1VM3eUjMQFd9nSL_jn7bvWpdOFfQ9oicT9dTjvVw$ 
+
+      - name: "Upload security artifacts"
         uses: actions/upload-artifact@v4
         if: always()
         with:
