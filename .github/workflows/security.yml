@@ -229,13 +229,13 @@ jobs:
                       add(path, idx, "INFO", "WEB_REQUEST_INPUT_ENTRYPOINT", "Codigo aplicativo", f"Entrada controlada por usuario asignada a '{var}'.", stripped, "HIGH")
 
                   if re.search(r"@\w*app\.route|@\w*router\.", stripped):
-                      add(path, idx, "INFO", "WEB_ROUTE_AUTH_REVIEW", "Codigo aplicativo", "Ruta HTTP detectada. Confirmar autenticacion/autorizacion si expone datos o acciones.", stripped, "MEDIUM", "Puede ser falso positivo si la ruta es publica por diseo.")
+                      add(path, idx, "INFO", "WEB_ROUTE_AUTH_REVIEW", "Codigo aplicativo", "Ruta HTTP detectada. Confirmar autenticacion/autorizacion si expone datos o acciones.", stripped, "MEDIUM", "Puede ser falso positivo si la ruta es publica por diseno.")
 
                   if "sensitive_keywords" in stripped and "[" in stripped:
                       add(path, idx, "MEDIUM", "AI_KEYWORD_BLACKLIST_SECURITY_CONTROL", "AI / LLM / Agentic", "Prompt injection / bypass: blacklist de keywords sensibles usada como control de seguridad. Es evadible con encoding, separacion de caracteres, idioma o reformulacion.", stripped, "HIGH")
 
                   if "any(" in stripped and " in " in stripped and "sensitive" in stripped.lower():
-                      add(path, idx, "MEDIUM", "AI_KEYWORD_BLACKLIST_SECURITY_CONTROL", "AI / LLM / Agentic", "Prompt injection / bypass: comprobacin por keywords sensibles. Es evadible y no reemplaza autorizacion real.", stripped, "HIGH")
+                      add(path, idx, "MEDIUM", "AI_KEYWORD_BLACKLIST_SECURITY_CONTROL", "AI / LLM / Agentic", "Prompt injection / bypass: comprobacion por keywords sensibles. Es evadible y no reemplaza autorizacion real.", stripped, "HIGH")
 
                   if "os.environ" in stripped and any(token in stripped.lower() for token in ["reveal", "secret", "owner", "token", "key", "password"]):
                       sev = "HIGH" if "!=" in stripped or "==" in stripped else "MEDIUM"
@@ -244,7 +244,7 @@ jobs:
                       add(path, idx, sev, rule, "AI / LLM / Agentic", msg, stripped, "HIGH")
 
                   if (("forget" in stripped.lower() and "rules" in stripped.lower()) or ("new" in stripped.lower() and "operator" in stripped.lower())):
-                      add(path, idx, "HIGH", "AI_PROMPT_TRIGGERED_SECURITY_FLAG_BYPASS", "AI / LLM / Agentic", "Prompt injection/backdoor: condicin textual permite activar comportamiento sensible o cambiar flags de seguridad.", stripped, "HIGH")
+                      add(path, idx, "HIGH", "AI_PROMPT_TRIGGERED_SECURITY_FLAG_BYPASS", "AI / LLM / Agentic", "Prompt injection/backdoor: condicion textual permite activar comportamiento sensible o cambiar flags de seguridad.", stripped, "HIGH")
 
                   if "RetrievalQA.from_chain_type" in stripped:
                       add(path, idx, "MEDIUM", "AI_RAG_RETRIEVALQA_CHAIN", "AI / LLM / Agentic", "Uso de RetrievalQA/RAG detectado. Revisar prompt injection, autorizacion sobre documentos, aislamiento por tenant y filtrado de fuentes.", stripped, "HIGH")
@@ -256,14 +256,14 @@ jobs:
                       add(path, idx, sev, "AI_DOCUMENT_LOADER_PROMPT_INJECTION_RISK", "AI / LLM / Agentic", "Loader de documento para AI/RAG detectado. Validar origen, tipo, tamano, sandboxing y prompt injection desde documentos.", stripped, "MEDIUM", "Si el documento es fijo y confiable, puede ser riesgo contextual.")
 
                   if any(v in stripped for v in ["FAISS.from_documents", "Chroma.from_documents", "Pinecone.from_documents"]):
-                      add(path, idx, "MEDIUM", "AI_VECTORSTORE_FROM_DOCUMENTS", "AI / LLM / Agentic", "Vectorstore desde documentos detectado. Revisar data poisoning, PII, secretos embebidos y autorizacion de recuperacin.", stripped, "HIGH")
+                      add(path, idx, "MEDIUM", "AI_VECTORSTORE_FROM_DOCUMENTS", "AI / LLM / Agentic", "Vectorstore desde documentos detectado. Revisar data poisoning, PII, secretos embebidos y autorizacion de recuperacion.", stripped, "HIGH")
 
                   if any(v in stripped for v in [".save_local(", ".load_local(", "FAISS.load_local", "Chroma.load_local"]):
                       add(path, idx, "LOW", "AI_LOCAL_VECTORSTORE_PERSISTENCE_CONTEXTUAL", "AI / LLM / Agentic", "Persistencia/carga local de vectorstore detectada. Riesgo contextual: poisoning/manipulacion local/deserializacion si el storage es controlable o compartido.", stripped, "MEDIUM", "Bajado a LOW porque suele ser contextual si el path no es controlable.")
 
                   if any(v in stripped for v in ["OpenAI(", "OpenAIEmbeddings(", "ChatOpenAI(", "AzureChatOpenAI("]):
                       sev = "MEDIUM" if has_route or has_request else "INFO"
-                      add(path, idx, sev, "AI_PROVIDER_USAGE_COST_AND_DATA_BOUNDARY", "AI / LLM / Agentic", "Uso de proveedor/modelo AI detectado. Revisar API key, lmites de costo, rate limiting, logging seguro y datos sensibles enviados al proveedor.", stripped, "MEDIUM")
+                      add(path, idx, sev, "AI_PROVIDER_USAGE_COST_AND_DATA_BOUNDARY", "AI / LLM / Agentic", "Uso de proveedor/modelo AI detectado. Revisar API key, limites de costo, rate limiting, logging seguro y datos sensibles enviados al proveedor.", stripped, "MEDIUM")
 
                   if re.search(r"\.(run|invoke|predict|generate|complete)\((query|user_query|prompt|msg|message|search_query|input|question)\b", stripped):
                       add(path, idx, "HIGH", "AI_USER_INPUT_TO_LLM_OR_RAG", "AI / LLM / Agentic", "Prompt injection: variable potencialmente controlada por usuario llega a LLM/RAG.", stripped, "HIGH")
@@ -272,7 +272,7 @@ jobs:
                       add(path, idx, "HIGH", "AI_USER_INPUT_TO_LLM_OR_RAG", "AI / LLM / Agentic", "Prompt injection: query/input llega a qa.run()/chain.run().", stripped, "HIGH")
 
                   if "shell=True" in stripped and any(fn in stripped for fn in ["subprocess", "Popen", "check_output", "run("]):
-                      add(path, idx, "HIGH", "CODE_COMMAND_INJECTION_SHELL_TRUE", "Codigo aplicativo", "Comando con shell=True detectado. Revisar si algn argumento depende de input de usuario.", stripped, "HIGH")
+                      add(path, idx, "HIGH", "CODE_COMMAND_INJECTION_SHELL_TRUE", "Codigo aplicativo", "Comando con shell=True detectado. Revisar si algun argumento depende de input de usuario.", stripped, "HIGH")
 
                   if "time.sleep(" in stripped:
                       m_sleep = re.search(r"time\.sleep\((\d+)\)", stripped)
@@ -288,7 +288,7 @@ jobs:
                               add(path, idx, "MEDIUM", "WEB_REQUEST_PARAM_NONE_DOS", "Codigo aplicativo", f"Parametro de request '{var}' usado con .lower() sin default/check visible de None; si falta el parametro puede causar 500/DoS.", stripped, "HIGH")
 
                   if "<script>" in stripped and " in " in stripped:
-                      add(path, idx, "MEDIUM", "WEB_WEAK_XSS_BLACKLIST_SCRIPT_ONLY", "Codigo aplicativo", "Mitigacion XSS dbil: solo bloquea literal <script>. No reemplaza sanitizacion/encoding contextual.", stripped, "HIGH")
+                      add(path, idx, "MEDIUM", "WEB_WEAK_XSS_BLACKLIST_SCRIPT_ONLY", "Codigo aplicativo", "Mitigacion XSS debil: solo bloquea literal <script>. No reemplaza sanitizacion/encoding contextual.", stripped, "HIGH")
 
                   if "innerhtml" in stripped.lower() or ".html(" in stripped.lower():
                       add(path, idx, "MEDIUM", "WEB_DOM_XSS_SINK_REVIEW", "Codigo aplicativo", "Sink HTML/DOM detectado. Revisar si recibe datos del usuario o del LLM sin sanitizacion.", stripped, "MEDIUM")
@@ -308,7 +308,7 @@ jobs:
               if has_route and has_ai:
                   expensive = ["OpenAIEmbeddings", "FAISS.from_documents", "save_local", "FAISS.load_local", "RetrievalQA.from_chain_type", "Chroma.from_documents"]
                   if len([x for x in expensive if x in text]) >= 3:
-                      add(path, 1, "MEDIUM", "AI_EXPENSIVE_RAG_REBUILT_PER_REQUEST", "AI / LLM / Agentic", "Posible DoS/costo: archivo combina rutas HTTP y reconstruccin de embeddings/vectorstore/RAG. Revisar cache, rate limiting y lmites de costo.", "", "HIGH")
+                      add(path, 1, "MEDIUM", "AI_EXPENSIVE_RAG_REBUILT_PER_REQUEST", "AI / LLM / Agentic", "Posible DoS/costo: archivo combina rutas HTTP y reconstruccion de embeddings/vectorstore/RAG. Revisar cache, rate limiting y limites de costo.", "", "HIGH")
 
           for pattern in ["*.py", "*.js", "*.ts", "*.jsx", "*.tsx"]:
               for path in pathlib.Path(".").rglob(pattern):
@@ -517,12 +517,12 @@ jobs:
             - id: web-python-flask-public-host
               languages: [python]
               severity: WARNING
-              message: "Flask app is exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!_i48OPHY_mKzUPCno6CAyX92D5Id8_iQhdy77x4cTnSB-OmmKcORXQDPtK7Jpi7sT93AXQ18ACpaHxl913HhzfEjVDBZww$ . Confirm network controls, authentication and production WSGI deployment."
+              message: "Flask app is exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8FkN-ZNTSQwTRBOMMKaaM-Tbn4TISUtHC_ACrJr4DxBbCLpbzoeV2ox7_fhuE1BNxSet9ugYQzQ8mfzG1VgWjMDUVJMnoA$ . Confirm network controls, authentication and production WSGI deployment."
               pattern-either:
-                - pattern: app.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!_i48OPHY_mKzUPCno6CAyX92D5Id8_iQhdy77x4cTnSB-OmmKcORXQDPtK7Jpi7sT93AXQ18ACpaHxl913HhzfEjVDBZww$ ", ...)
-                - pattern: app.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!_i48OPHY_mKzUPCno6CAyX92D5Id8_iQhdy77x4cTnSB-OmmKcORXQDPtK7Jpi7sT93AXQ18ACpaHxl913HhzfEjVDBZww$ ", ...)
-                - pattern: $APP.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!_i48OPHY_mKzUPCno6CAyX92D5Id8_iQhdy77x4cTnSB-OmmKcORXQDPtK7Jpi7sT93AXQ18ACpaHxl913HhzfEjVDBZww$ ", ...)
-                - pattern: $APP.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!_i48OPHY_mKzUPCno6CAyX92D5Id8_iQhdy77x4cTnSB-OmmKcORXQDPtK7Jpi7sT93AXQ18ACpaHxl913HhzfEjVDBZww$ ", ...)
+                - pattern: app.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8FkN-ZNTSQwTRBOMMKaaM-Tbn4TISUtHC_ACrJr4DxBbCLpbzoeV2ox7_fhuE1BNxSet9ugYQzQ8mfzG1VgWjMDUVJMnoA$ ", ...)
+                - pattern: app.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8FkN-ZNTSQwTRBOMMKaaM-Tbn4TISUtHC_ACrJr4DxBbCLpbzoeV2ox7_fhuE1BNxSet9ugYQzQ8mfzG1VgWjMDUVJMnoA$ ", ...)
+                - pattern: $APP.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8FkN-ZNTSQwTRBOMMKaaM-Tbn4TISUtHC_ACrJr4DxBbCLpbzoeV2ox7_fhuE1BNxSet9ugYQzQ8mfzG1VgWjMDUVJMnoA$ ", ...)
+                - pattern: $APP.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8FkN-ZNTSQwTRBOMMKaaM-Tbn4TISUtHC_ACrJr4DxBbCLpbzoeV2ox7_fhuE1BNxSet9ugYQzQ8mfzG1VgWjMDUVJMnoA$ ", ...)
             - id: web-python-route-long-sleep-dos
               languages: [python]
               severity: WARNING
