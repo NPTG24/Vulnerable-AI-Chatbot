@@ -1,7 +1,28 @@
+name: Security Pipeline - AI Precise
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
   code-ai-static:
-    name: "AI/App Code - Static Analyzer"
+    name: "AI/App Code - Precise Static Analyzer"
     runs-on: ubuntu-latest
     continue-on-error: true
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -16,24 +37,6 @@
 
           skip_dirs = {".git", ".github", "node_modules", ".venv", "venv", "dist", "build", "__pycache__"}
           findings = []
-
-          AI_CALL_NAMES = {
-              "OpenAI",
-              "ChatOpenAI",
-              "OpenAIEmbeddings",
-              "HuggingFaceEmbeddings",
-              "RetrievalQA.from_chain_type",
-              "ConversationalRetrievalChain.from_llm",
-              "FAISS.from_documents",
-              "Chroma.from_documents",
-              "FAISS.load_local",
-              "PyPDFLoader",
-              "UnstructuredFileLoader",
-              "Docx2txtLoader",
-              "CSVLoader",
-              "TextLoader",
-              "DirectoryLoader",
-          }
 
           DANGEROUS_AGENT_TOOLS = {
               "PythonREPLTool",
@@ -71,10 +74,10 @@
               })
 
           def call_name(node):
-              if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQOIP-Kgg$ ):
+              if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35gUFWfJQ$ ):
                   return call_name(node.func)
-              if isinstance(node, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ):
-                  return https://urldefense.com/v3/__http://node.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQosDaKGQ$ 
+              if isinstance(node, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ):
+                  return https://urldefense.com/v3/__http://node.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS369x_WSTQ$ 
               if isinstance(node, ast.Attribute):
                   base = call_name(node.value)
                   return f"{base}.{node.attr}" if base else node.attr
@@ -92,7 +95,7 @@
 
           def contains_name(node, names):
               for child in ast.walk(node):
-                  if isinstance(child, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ) and https://urldefense.com/v3/__http://child.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQ4fYK7Hw$  in names:
+                  if isinstance(child, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and https://urldefense.com/v3/__http://child.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34E1gomRg$  in names:
                       return True
               return False
 
@@ -127,45 +130,28 @@
 
           def is_route_function(node):
               for dec in node.decorator_list:
-                  if isinstance(dec, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQOIP-Kgg$ ) and ".route" in call_name(dec):
+                  if isinstance(dec, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35gUFWfJQ$ ) and ".route" in call_name(dec):
                       return True
               return False
 
           def function_calls(node):
               calls = []
               for child in ast.walk(node):
-                  if isinstance(child, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQOIP-Kgg$ ):
+                  if isinstance(child, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35gUFWfJQ$ ):
                       name = call_name(child)
                       if name:
                           calls.append((name, child))
               return calls
 
-          def is_ai_call(name):
-              if name in AI_CALL_NAMES:
-                  return True
-              if any(name.endswith("." + x) for x in AI_CALL_NAMES):
-                  return True
-              if name.endswith(".as_retriever"):
-                  return True
-              if name.endswith(".similarity_search"):
-                  return True
-              if name.endswith(".add_documents"):
-                  return True
-              if name.endswith(".save_local"):
-                  return True
-              if name.endswith(".load_local"):
-                  return True
-              return False
-
           def call_has_arg_name(call, names):
               for arg in call.args:
-                  if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ) and https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsT-OJLlUA$  in names:
-                      return https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsT-OJLlUA$ 
+                  if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37XCruY6A$  in names:
+                      return https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37XCruY6A$ 
                   if contains_name(arg, names):
                       return "<derived>"
               for kw in call.keywords:
-                  if isinstance(kw.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ) and https://urldefense.com/v3/__http://kw.value.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsS0ZKp5Uw$  in names:
-                      return https://urldefense.com/v3/__http://kw.value.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsS0ZKp5Uw$ 
+                  if isinstance(kw.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and https://urldefense.com/v3/__http://kw.value.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37Tcsbk6A$  in names:
+                      return https://urldefense.com/v3/__http://kw.value.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37Tcsbk6A$ 
                   if contains_name(kw.value, names):
                       return "<derived>"
               return ""
@@ -205,82 +191,68 @@
               try:
                   tree = ast.parse(text)
               except SyntaxError as error:
-                  add(py, error.lineno or 1, "MEDIUM", "PYTHON_SYNTAX_ERROR", "Código aplicativo", f"No se pudo analizar por SyntaxError: {error}", "", "HIGH")
+                  add(py, error.lineno or 1, "MEDIUM", "PYTHON_SYNTAX_ERROR", "Codigo aplicativo", f"No se pudo analizar por SyntaxError: {error}", "", "HIGH")
                   continue
 
-              function_defs = {https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsTimtNRvA$ : node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+              function_defs = {https://urldefense.com/v3/__http://node.name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34w_LYDFw$ : node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
               route_functions = {name for name, node in function_defs.items() if is_route_function(node)}
               graph = build_call_graph(function_defs)
               route_reachable = reachable_from_routes(route_functions, graph)
 
-              # Variables originadas en request dentro de cada función.
               tainted_by_func = {}
+
               for fname, fnode in function_defs.items():
                   tainted = set()
+
                   for node in ast.walk(fnode):
                       if isinstance(node, ast.Assign):
                           if contains_request(node.value):
                               for target in node.targets:
-                                  if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ):
-                                      tainted.add(https://urldefense.com/v3/__http://target.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsSH45_U2A$ )
+                                  if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ):
+                                      tainted.add(https://urldefense.com/v3/__http://target.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS377JTOWHQ$ )
 
-                          # Propagación simple: a = b.lower(), re.sub(..., b), etc.
-                          value_names = {https://urldefense.com/v3/__http://child.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQ4fYK7Hw$  for child in ast.walk(node.value) if isinstance(child, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ )}
+                          value_names = {https://urldefense.com/v3/__http://child.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34E1gomRg$  for child in ast.walk(node.value) if isinstance(child, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ )}
                           if value_names & tainted:
                               for target in node.targets:
-                                  if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ):
-                                      tainted.add(https://urldefense.com/v3/__http://target.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsSH45_U2A$ )
-
-                  # Si la función es llamada desde una route con args tainted, sus parámetros son tainted.
-                  for route in route_functions:
-                      rnode = function_defs[route]
-                      route_tainted = tainted_by_func.get(route, set()) | tainted
-                      for call in [c for _, c in function_calls(rnode)]:
-                          called = call_name(call)
-                          if called == fname:
-                              for idx, arg in enumerate(call.args):
-                                  if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ) and (https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsT-OJLlUA$  in route_tainted or https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsT-OJLlUA$  in USER_INPUT_NAMES):
-                                      if idx < len(fnode.args.args):
-                                          tainted.add(fnode.args.args[idx].arg)
+                                  if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ):
+                                      tainted.add(https://urldefense.com/v3/__http://target.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS377JTOWHQ$ )
 
                   tainted_by_func[fname] = tainted
 
-              # Segunda pasada para propagar llamadas route -> función después de calcular taint inicial.
               for fname, fnode in function_defs.items():
                   tainted = set(tainted_by_func.get(fname, set()))
+
                   for route in route_functions:
                       rnode = function_defs[route]
                       route_tainted = tainted_by_func.get(route, set())
+
                       for _, call in function_calls(rnode):
                           if call_name(call) == fname:
                               for idx, arg in enumerate(call.args):
-                                  if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ) and (https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsT-OJLlUA$  in route_tainted or https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsT-OJLlUA$  in USER_INPUT_NAMES):
+                                  if isinstance(arg, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and (https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37XCruY6A$  in route_tainted or https://urldefense.com/v3/__http://arg.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37XCruY6A$  in USER_INPUT_NAMES):
                                       if idx < len(fnode.args.args):
                                           tainted.add(fnode.args.args[idx].arg)
+
                   tainted_by_func[fname] = tainted
 
-              # Hallazgos por función.
               for fname, fnode in function_defs.items():
                   tainted = tainted_by_func.get(fname, set())
                   is_reachable = fname in route_reachable
                   reach = " Alcanzable desde una ruta Flask." if is_reachable else ""
 
-                  # Rutas sin auth: INFO para no meter falsos positivos duros.
                   if fname in route_functions:
-                      add(py, fnode.lineno, "INFO", "WEB_FLASK_ROUTE_AUTH_REVIEW", "Código aplicativo", f"Ruta Flask detectada en {fname}(). Confirmar autenticación/autorización si expone acciones o datos sensibles.", source_line(lines, fnode.lineno), "MEDIUM")
+                      add(py, fnode.lineno, "INFO", "WEB_FLASK_ROUTE_AUTH_REVIEW", "Codigo aplicativo", f"Ruta Flask detectada en {fname}(). Confirmar autenticacion/autorizacion si expone acciones o datos sensibles.", source_line(lines, fnode.lineno), "MEDIUM")
 
                   for node in ast.walk(fnode):
                       line = getattr(node, "lineno", fnode.lineno)
 
                       if isinstance(node, ast.Assign):
-                          # sensitive_keywords = [...]
                           for target in node.targets:
-                              if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ) and "sensitive" in target.id.lower() and isinstance(node.value, (ast.List, ast.Tuple)):
+                              if isinstance(target, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ) and "sensitive" in target.id.lower() and isinstance(node.value, (ast.List, ast.Tuple)):
                                   words = [str(getattr(elt, "value", "")).lower() for elt in node.value.elts if isinstance(elt, ast.Constant)]
                                   if any(w in {"secret", "secrets", "password", "passwords", "credential", "credentials", "key", "keys", "token"} for w in words):
-                                      add(py, line, "MEDIUM", "AI_KEYWORD_BLACKLIST_SECURITY_CONTROL", "AI / LLM / Agentic", "Prompt injection / bypass: blacklist de keywords sensibles usada como control de seguridad. Es evadible con encoding, separación, idioma o reformulación." + reach, source_line(lines, line), "HIGH")
+                                      add(py, line, "MEDIUM", "AI_KEYWORD_BLACKLIST_SECURITY_CONTROL", "AI / LLM / Agentic", "Prompt injection / bypass: blacklist de keywords sensibles usada como control de seguridad. Es evadible con encoding, separacion, idioma o reformulacion." + reach, source_line(lines, line), "HIGH")
 
-                          # os.environ["reveal_secret"] = ...
                           for target in node.targets:
                               key = env_key_from_subscript(target)
                               if key and any(k in key.lower() for k in ["secret", "owner", "token", "key", "password", "reveal"]):
@@ -288,27 +260,27 @@
 
                       if isinstance(node, ast.If):
                           lits = literals_in(node.test)
+
                           if contains_env_set_yes(node) and len(set(lits)) >= 2:
-                              add(py, line, "HIGH", "PROMPT_TRIGGERED_SECURITY_FLAG_BYPASS", "AI / LLM / Agentic", "Prompt injection/backdoor: condición basada en texto puede activar flags de seguridad con os.environ = 'yes'." + reach, source_line(lines, line), "HIGH")
+                              add(py, line, "HIGH", "PROMPT_TRIGGERED_SECURITY_FLAG_BYPASS", "AI / LLM / Agentic", "Prompt injection/backdoor: condicion basada en texto puede activar flags de seguridad con os.environ = 'yes'." + reach, source_line(lines, line), "HIGH")
 
                           if any(x in lits for x in ["script", "<script>"]):
-                              add(py, line, "MEDIUM", "WEAK_XSS_BLACKLIST_SCRIPT_ONLY", "Código aplicativo", "Mitigación XSS débil: solo bloquea literal '<script>'. No reemplaza sanitización/encoding contextual.", source_line(lines, line), "HIGH")
+                              add(py, line, "MEDIUM", "WEAK_XSS_BLACKLIST_SCRIPT_ONLY", "Codigo aplicativo", "Mitigacion XSS debil: solo bloquea literal '<script>'. No reemplaza sanitizacion/encoding contextual.", source_line(lines, line), "HIGH")
 
-                          # if os.environ[...] != "yes"
                           for child in ast.walk(node.test):
                               key = env_key_from_subscript(child)
                               if key and any(k in key.lower() for k in ["secret", "owner", "token", "key", "password", "reveal"]):
-                                  add(py, line, "HIGH", "AI_ENV_FLAG_AUTHORIZATION_GATE", "AI / LLM / Agentic", f"Gate de autorización/divulgación sensible depende de os.environ['{key}']; revisar bypass por estado mutable." + reach, source_line(lines, line), "HIGH")
+                                  add(py, line, "HIGH", "AI_ENV_FLAG_AUTHORIZATION_GATE", "AI / LLM / Agentic", f"Gate de autorizacion/divulgacion sensible depende de os.environ['{key}']; revisar bypass por estado mutable." + reach, source_line(lines, line), "HIGH")
                                   break
 
-                      if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQOIP-Kgg$ ):
+                      if isinstance(node, https://urldefense.com/v3/__http://ast.Call__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35gUFWfJQ$ ):
                           cname = call_name(node)
 
                           if cname in DANGEROUS_AGENT_TOOLS or any(cname.endswith("." + x) for x in DANGEROUS_AGENT_TOOLS):
-                              add(py, line, "HIGH", "AI_AGENT_DANGEROUS_TOOL", "AI / LLM / Agentic", f"Agente/herramienta peligrosa detectada: {cname}. El modelo podría gatillar shell, HTTP o ejecución de código." + reach, source_line(lines, line), "HIGH")
+                              add(py, line, "HIGH", "AI_AGENT_DANGEROUS_TOOL", "AI / LLM / Agentic", f"Agente/herramienta peligrosa detectada: {cname}. El modelo podria gatillar shell, HTTP o ejecucion de codigo." + reach, source_line(lines, line), "HIGH")
 
                           if cname == "RetrievalQA.from_chain_type" or cname.endswith(".RetrievalQA.from_chain_type"):
-                              add(py, line, "MEDIUM", "AI_RAG_RETRIEVALQA_CHAIN", "AI / LLM / Agentic", "Uso de RetrievalQA/RAG detectado. Revisar prompt injection, autorización sobre documentos, aislamiento por tenant y filtrado de fuentes." + reach, source_line(lines, line), "HIGH")
+                              add(py, line, "MEDIUM", "AI_RAG_RETRIEVALQA_CHAIN", "AI / LLM / Agentic", "Uso de RetrievalQA/RAG detectado. Revisar prompt injection, autorizacion sobre documentos, aislamiento por tenant y filtrado de fuentes." + reach, source_line(lines, line), "HIGH")
                               if has_chain_type_stuff(node):
                                   add(py, line, "MEDIUM", "AI_RAG_STUFF_CHAIN_PROMPT_INJECTION_RISK", "AI / LLM / Agentic", "RAG chain_type='stuff': contenido recuperado se inserta directo en el prompt; riesgo de prompt injection desde documentos." + reach, source_line(lines, line), "HIGH")
 
@@ -318,24 +290,24 @@
                                   add(py, line, "HIGH", "AI_USER_INPUT_TO_LLM_OR_RAG", "AI / LLM / Agentic", f"Prompt injection: input potencialmente controlado por usuario ({tainted_arg}) llega a {cname}()." + reach, source_line(lines, line), "HIGH")
 
                           if cname in {"PyPDFLoader", "UnstructuredFileLoader", "Docx2txtLoader", "CSVLoader", "TextLoader", "DirectoryLoader"}:
-                              add(py, line, "MEDIUM", "AI_DOCUMENT_LOADER_PROMPT_INJECTION_RISK", "AI / LLM / Agentic", f"Loader de documento {cname} detectado. Validar origen, tipo, tamaño, sandboxing y prompt injection desde documentos." + reach, source_line(lines, line), "HIGH")
+                              add(py, line, "MEDIUM", "AI_DOCUMENT_LOADER_PROMPT_INJECTION_RISK", "AI / LLM / Agentic", f"Loader de documento {cname} detectado. Validar origen, tipo, tamano, sandboxing y prompt injection desde documentos." + reach, source_line(lines, line), "HIGH")
 
                           if cname in {"FAISS.from_documents", "Chroma.from_documents"}:
-                              add(py, line, "MEDIUM", "AI_VECTORSTORE_FROM_DOCUMENTS", "AI / LLM / Agentic", "Vectorstore desde documentos detectado. Revisar data poisoning, PII, secretos embebidos y autorización de recuperación." + reach, source_line(lines, line), "HIGH")
+                              add(py, line, "MEDIUM", "AI_VECTORSTORE_FROM_DOCUMENTS", "AI / LLM / Agentic", "Vectorstore desde documentos detectado. Revisar data poisoning, PII, secretos embebidos y autorizacion de recuperacion." + reach, source_line(lines, line), "HIGH")
 
                           if cname.endswith(".save_local") or cname.endswith(".load_local") or cname == "FAISS.load_local":
-                              add(py, line, "MEDIUM", "AI_LOCAL_VECTORSTORE_PERSISTENCE", "AI / LLM / Agentic", "Persistencia/carga local de vectorstore detectada. Revisar poisoning, manipulación local, aislamiento y deserialización insegura." + reach, source_line(lines, line), "HIGH")
+                              add(py, line, "MEDIUM", "AI_LOCAL_VECTORSTORE_PERSISTENCE", "AI / LLM / Agentic", "Persistencia/carga local de vectorstore detectada. Revisar poisoning, manipulacion local, aislamiento y deserializacion insegura." + reach, source_line(lines, line), "HIGH")
 
                           if cname in {"OpenAI", "OpenAIEmbeddings", "ChatOpenAI"}:
                               sev = "MEDIUM" if is_reachable else "INFO"
-                              add(py, line, sev, "AI_PROVIDER_USAGE_COST_AND_DATA_BOUNDARY", "AI / LLM / Agentic", f"Uso de {cname} detectado. Revisar API key, límites de costo, rate limiting, logging seguro y datos sensibles enviados al proveedor." + reach, source_line(lines, line), "MEDIUM")
+                              add(py, line, sev, "AI_PROVIDER_USAGE_COST_AND_DATA_BOUNDARY", "AI / LLM / Agentic", f"Uso de {cname} detectado. Revisar API key, limites de costo, rate limiting, logging seguro y datos sensibles enviados al proveedor." + reach, source_line(lines, line), "MEDIUM")
 
                           if cname == "time.sleep":
                               seconds = None
                               if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, (int, float)):
                                   seconds = node.args[0].value
                               if seconds and seconds >= 30:
-                                  add(py, line, "MEDIUM", "WEB_ROUTE_LONG_SLEEP_DOS", "Código aplicativo", f"time.sleep({seconds}) detectado; si está en ruta HTTP bloquea workers y puede causar DoS." + reach, source_line(lines, line), "HIGH")
+                                  add(py, line, "MEDIUM", "WEB_ROUTE_LONG_SLEEP_DOS", "Codigo aplicativo", f"time.sleep({seconds}) detectado; si esta en ruta HTTP bloquea workers y puede causar DoS." + reach, source_line(lines, line), "HIGH")
 
                           if cname.endswith(".run"):
                               first = const_str(node.args[0]) if node.args else None
@@ -343,21 +315,19 @@
                               for kw in node.keywords:
                                   if kw.arg == "host":
                                       host_kw = const_str(kw.value)
-                              if first == "https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsRY3h0UoA$ " or host_kw == "https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsRY3h0UoA$ ":
-                                  add(py, line, "MEDIUM", "WEB_FLASK_PUBLIC_HOST", "Código aplicativo", "Flask expuesto en https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsRY3h0UoA$ . Confirmar autenticación, firewall/proxy y WSGI productivo.", source_line(lines, line), "HIGH")
+                              if first == "https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34ibbNeAQ$ " or host_kw == "https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34ibbNeAQ$ ":
+                                  add(py, line, "MEDIUM", "WEB_FLASK_PUBLIC_HOST", "Codigo aplicativo", "Flask expuesto en https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS34ibbNeAQ$ . Confirmar autenticacion, firewall/proxy y WSGI productivo.", source_line(lines, line), "HIGH")
 
                           if cname == "re.sub":
                               tainted_arg = call_has_arg_name(node, tainted | USER_INPUT_NAMES)
                               if tainted_arg:
-                                  add(py, line, "INFO", "INPUT_SANITIZATION_REGEX_REVIEW", "Código aplicativo", f"Sanitización con regex sobre input ({tainted_arg}). Confirmar allowlist suficiente para el contexto y que no genere bypass lógico.", source_line(lines, line), "MEDIUM")
+                                  add(py, line, "INFO", "INPUT_SANITIZATION_REGEX_REVIEW", "Codigo aplicativo", f"Sanitizacion con regex sobre input ({tainted_arg}). Confirmar allowlist suficiente para el contexto y que no genere bypass logico.", source_line(lines, line), "MEDIUM")
 
-                          # .lower() sobre request sin None check
-                          if cname.endswith(".lower") and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQTjvP3GA$ ):
-                              base = https://urldefense.com/v3/__http://node.func.value.id__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsRU1zNq_Q$ 
+                          if cname.endswith(".lower") and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, https://urldefense.com/v3/__http://ast.Name__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS35O4E7D8w$ ):
+                              base = https://urldefense.com/v3/__http://node.func.value.id__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37iOK3wLw$ 
                               if base in tainted:
-                                  add(py, line, "MEDIUM", "WEB_REQUEST_PARAM_NONE_DOS", "Código aplicativo", f"Parámetro de request '{base}' usado con .lower() sin check visible de None; puede causar 500/DoS si falta el parámetro.", source_line(lines, line), "HIGH")
+                                  add(py, line, "MEDIUM", "WEB_REQUEST_PARAM_NONE_DOS", "Codigo aplicativo", f"Parametro de request '{base}' usado con .lower() sin check visible de None; puede causar 500/DoS si falta el parametro.", source_line(lines, line), "HIGH")
 
-                  # Cost/DoS: operaciones caras dentro de flujo reachable desde ruta.
                   if is_reachable:
                       expensive = []
                       for _, call in function_calls(fnode):
@@ -444,9 +414,10 @@
           retention-days: 30
 
   ai-security:
-    name: "AI Security — Semgrep LLM Rules"
+    name: "AI Security - Semgrep LLM Rules"
     runs-on: ubuntu-latest
     continue-on-error: true
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -656,22 +627,29 @@
           python3 - <<'PY'
           import json
           import pathlib
+
           p = pathlib.Path("semgrep_ai.sarif")
+
           if not p.exists():
               p.write_text('{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"AI Security","rules":[]}},"results":[]}]}', encoding="utf-8")
+
           try:
               data = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
           except Exception:
               data = {"version": "2.1.0", "runs": []}
+
           if not data.get("runs"):
               data["runs"] = [{"tool": {"driver": {"name": "AI Security", "rules": []}}, "results": []}]
+
           for run in data.get("runs", []):
               driver = run.setdefault("tool", {}).setdefault("driver", {})
               driver["name"] = "AI Security - Semgrep LLM Rules"
-              driver["informationUri"] = "https://urldefense.com/v3/__https://owasp.org/www-project-top-10-for-large-language-model-applications/__;!!P110LumUDw!7ft0jWiuRTs-a4fV3Y65nWdEB6UKZ2i9Maq0DTHEvOIOuC1cJhmeuHt76_YQz26YTBXER8fs6fnDx-P3h29uLsQFDzNDzA$ "
+              driver["informationUri"] = "https://urldefense.com/v3/__https://owasp.org/www-project-top-10-for-large-language-model-applications/__;!!P110LumUDw!5EroyneAPQWGDAH8Q1rLK2DQjvTIfFZ_s0aBsKs1JMY5B_aebqcCBxcW340cnUi9TeuKDg1sYMZhhnhZykKMS37POht3_Q$ "
+
               for result in run.get("results", []):
                   result.setdefault("properties", {})["kind"] = "vulnerability"
                   result.setdefault("properties", {})["category"] = "AI / LLM / Agentic"
+
           p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
           PY
 
@@ -700,20 +678,115 @@
             .semgrep/ai-security/ai_rules.yml
           retention-days: 30
 
-# IMPORTANTE:
-# En el job `centralized-report`, verifica que el bloque `needs:` incluya:
-#
-# needs:
-#   - dependency-policy
-#   - code-ai-static
-#   - ruff
-#   - codeql
-#   - semgrep
-#   - ai-security
-#   - sca
-#   - secret-scan
-#   - docker-security
-#   - iac-checkov
-#
-# Y que el parser del reporte lea `ai_app_static_findings.json`.
-# Si estás usando el último pipeline que te pasé, esto ya estaba agregado.
+  central-ai-report:
+    name: "Report - AI Security Summary"
+    runs-on: ubuntu-latest
+    needs:
+      - code-ai-static
+      - ai-security
+    if: always()
+    continue-on-error: true
+
+    steps:
+      - name: Download AI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all_ai_results
+
+      - name: Build AI report
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          root = pathlib.Path("all_ai_results")
+          output_dir = pathlib.Path("ai-security-report")
+          output_dir.mkdir(exist_ok=True)
+
+          findings = []
+
+          def norm(sev):
+              sev = str(sev or "UNKNOWN").upper()
+              mapping = {"ERROR": "HIGH", "WARNING": "MEDIUM", "WARN": "MEDIUM", "NOTE": "LOW"}
+              return mapping.get(sev, sev)
+
+          def add(category, severity, tool, location, detail, rule):
+              findings.append({
+                  "category": category,
+                  "severity": norm(severity),
+                  "tool": tool,
+                  "location": location,
+                  "detail": detail,
+                  "rule": rule,
+              })
+
+          for path in root.rglob("ai_app_static_findings.json"):
+              try:
+                  data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+              except Exception:
+                  continue
+
+              for item in data.get("findings", []):
+                  add(
+                      item.get("category", "AI / LLM / Agentic"),
+                      item.get("severity", "UNKNOWN"),
+                      item.get("tool", "AI/App Static Analyzer"),
+                      f"{item.get('file','?')}:{item.get('line','?')}",
+                      item.get("message", ""),
+                      item.get("rule", ""),
+                  )
+
+          for path in root.rglob("semgrep_ai.json"):
+              try:
+                  data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+              except Exception:
+                  continue
+
+              for item in data.get("results", []):
+                  extra = item.get("extra", {})
+                  add(
+                      "AI / LLM / Agentic",
+                      extra.get("severity", "UNKNOWN"),
+                      "Semgrep AI Rules",
+                      f"{item.get('path','?')}:{item.get('start',{}).get('line','?')}",
+                      extra.get("message", ""),
+                      item.get("check_id", ""),
+                  )
+
+          order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "UNKNOWN": 5}
+          findings.sort(key=lambda f: (order.get(f["severity"], 99), f["category"], f["location"]))
+
+          lines = []
+          lines.append("REPORTE AI / LLM / AGENTIC")
+          lines.append("=" * 90)
+          lines.append(f"Hallazgos AI/AppSec: {len(findings)}")
+          lines.append("")
+          lines.append("HALLAZGOS CON LINEA")
+          lines.append("=" * 90)
+
+          if not findings:
+              lines.append("Sin hallazgos.")
+          else:
+              for idx, f in enumerate(findings, 1):
+                  lines.append("")
+                  lines.append(f"{idx}. [{f['severity']}] [{f['category']}] {f['rule']}")
+                  lines.append(f"   Herramienta : {f['tool']}")
+                  lines.append(f"   Linea/Error : {f['location']}")
+                  lines.append(f"   Detalle     : {f['detail']}")
+
+          report = output_dir / "REPORTE_AI_SECURITY.txt"
+          report.write_text("\n".join(lines), encoding="utf-8")
+
+          report_json = output_dir / "REPORTE_AI_SECURITY.json"
+          report_json.write_text(json.dumps({"findings": findings}, indent=2, ensure_ascii=False), encoding="utf-8")
+
+          print(report.read_text(encoding="utf-8"))
+          PY
+
+      - name: Upload AI report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-security-report
+          path: ai-security-report
+          retention-days: 30
