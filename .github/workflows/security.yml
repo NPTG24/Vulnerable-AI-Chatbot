@@ -94,13 +94,18 @@ jobs:
               pkg = name_match.group(1) if name_match else clean
               inv("python", path, line_no, pkg, clean, source)
               exact = re.match(r"^\s*([A-Za-z0-9_.-]+)(\[[A-Za-z0-9_,.-]+\])?\s*==\s*([A-Za-z0-9_.!+*-]+)\s*(;.*)?$", clean)
+              strict_version = re.compile(r"^\d+\.\d+\.\d+([a-zA-Z0-9_.!+-]+)?$")
               if exact:
+                  version_value = exact.group(3)
+                  if strict_version.match(version_value):
+                      return
+                  add("MEDIUM", "PYTHON_DEPENDENCY_INCOMPLETE_VERSION", path, line_no, "Dependencia Python con version incompleta o no estandar. La politica exige formato MAJOR.MINOR.PATCH, por ejemplo 0.12.5. Corrija la version: " + line, "hygiene", "python", pkg, version_value)
                   return
               if re.match(r"^\s*[A-Za-z0-9_.-]+(\[[A-Za-z0-9_,.-]+\])?\s*$", clean):
                   add("MEDIUM", "PYTHON_DEPENDENCY_WITHOUT_VERSION", path, line_no, "La dependencia Python no especifica una version fija. Utilice un pin exacto (==) para garantizar reproducibilidad, facilitar el analisis SCA y reducir el riesgo de cambios inesperados: " + line, "vulnerability", "python", pkg, "")
                   return
               if re.search(r"\s*(>=|<=|~=|>|<|!=|===|\^)\s*", clean):
-                  add("MEDIUM", "PYTHON_DEPENDENCY_NOT_EXACT_PIN", path, line_no, "La dependencia Python utiliza un rango o un especificador no deterministico. Tras validar la compatibilidad, sustituya el rango por una version fija con ==: " + line, "hygiene", "python", pkg, clean)
+                  add("MEDIUM", "PYTHON_DEPENDENCY_NOT_EXACT_PIN", path, line_no, "La dependencia Python utiliza un rango o un especificador no deterministico. Tras validar la compatibilidad, sustituya el rango por una version fija con == y formato MAJOR.MINOR.PATCH: " + line, "hygiene", "python", pkg, clean)
                   return
               add("MEDIUM", "PYTHON_DEPENDENCY_INVALID_FORMAT", path, line_no, "La declaracion de la dependencia Python no pudo interpretarse correctamente. Revise el formato y utilice una sintaxis compatible con PEP 440: " + line, "hygiene", "python", pkg, clean)
 
@@ -110,8 +115,8 @@ jobs:
               if not value:
                   add("MEDIUM", "PYTHON_REQUIRES_PYTHON_MISSING", path, line_no, "requires-python no esta declarado o esta vacio. Riesgo alto: permite ejecutar el proyecto sobre runtimes no validados. Defina una version de Python controlada.", "hygiene", "python", "python", value)
                   return
-              if re.search(r"(>=|<=|>|<|~=|\*|,)", value):
-                  add("MEDIUM", "PYTHON_RUNTIME_NOT_EXACT_PIN", path, line_no, "Version de Python no exacta o no reproducible. Riesgo alto: diferencias de runtime pueden cambiar dependencias transitivas y superficie de ataque. Declare una version o politica de runtime controlada: requires-python = " + value, "hygiene", "python", "python", value)
+              if re.search(r"(>=|<=|>|<|~=|\*|,)", value) or not re.match(r"^\d+\.\d+\.\d+([a-zA-Z0-9_.!+-]+)?$", value):
+                  add("MEDIUM", "PYTHON_RUNTIME_NOT_EXACT_PIN", path, line_no, "Version de Python no exacta o no reproducible. La politica exige formato MAJOR.MINOR.PATCH, por ejemplo 3.12.1, salvo excepcion formal. Valor detectado: requires-python = " + value, "hygiene", "python", "python", value)
 
           def check_npm(path, line_no, name, version, source):
               name = str(name)
@@ -121,15 +126,15 @@ jobs:
               if version.startswith(("file:", "git+", "github:", "workspace:", "link:")):
                   add("INFO", "NPM_LOCAL_OR_WORKSPACE_DEPENDENCY", path, line_no, f"Dependencia npm local, workspace o enlazada. Riesgo alto: puede evadir controles de registro, integridad y versionado. Valide origen, trazabilidad y versionado: {name}@{version}", "hygiene", "npm", name, version)
               elif version in {"", "*", "latest"}:
-                  add("MEDIUM", "NPM_DEPENDENCY_WITHOUT_VERSION", path, line_no, f"La dependencia npm no utiliza una version fija. Evite rangos (^, ~, >=, latest o *) y establezca una version exacta para garantizar compilaciones reproducibles: {name}@{version}", "vulnerability", "npm", name, version)
+                  add("MEDIUM", "NPM_DEPENDENCY_WITHOUT_VERSION", path, line_no, f"La dependencia npm no utiliza una version fija completa. La politica exige formato MAJOR.MINOR.PATCH, por ejemplo 0.12.5. Evite rangos (^, ~, >=, latest o *) y establezca una version exacta: {name}@{version}", "vulnerability", "npm", name, version)
               elif not exact.match(version):
-                  add("MEDIUM", "NPM_DEPENDENCY_NOT_EXACT_PIN", path, line_no, f"La dependencia npm no utiliza una version fija. Evite rangos (^, ~, >=, latest o *) y establezca una version exacta para garantizar compilaciones reproducibles: {name}@{version}", "hygiene", "npm", name, version)
+                  add("MEDIUM", "NPM_DEPENDENCY_NOT_EXACT_PIN", path, line_no, f"La dependencia npm no utiliza una version fija completa. La politica exige formato MAJOR.MINOR.PATCH, por ejemplo 0.12.5. Evite rangos (^, ~, >=, latest o *) y establezca una version exacta: {name}@{version}", "hygiene", "npm", name, version)
 
           for path in sorted(pathlib.Path(".").rglob("*")):
               if skip(path) or not path.is_file():
                   continue
               n = path.name.lower()
-              if n in {"requirements.txt", "requirements-dev.txt", "requirements-test.txt", "requirements-prod.txt", "requirements-production.txt", "https://urldefense.com/v3/__http://requirements.in__;!!P110LumUDw!94XyBMn9RyiEyfa2uB1J-zEqMM2ZwxawjK7pI-dE4ocyK1SqNbwcWnEPun5ihMaB5BwFIVAtchftlu24Bl84MyZcJEqVtw$ ", "constraints.txt", "dev-requirements.txt", "test-requirements.txt", "prod-requirements.txt"} or (n.startswith("requirements") and n.endswith((".txt", ".in", ".pip"))):
+              if n in {"requirements.txt", "requirements-dev.txt", "requirements-test.txt", "requirements-prod.txt", "requirements-production.txt", "https://urldefense.com/v3/__http://requirements.in__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5dRu208Ag$ ", "constraints.txt", "dev-requirements.txt", "test-requirements.txt", "prod-requirements.txt"} or (n.startswith("requirements") and n.endswith((".txt", ".in", ".pip"))):
                   python_dependency_files_found += 1
                   raw_lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
                   useful_lines = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith("#")]
@@ -178,7 +183,9 @@ jobs:
                               if not version or version == "*":
                                   add("MEDIUM", "PYTHON_DEPENDENCY_WITHOUT_VERSION", path, line, f"Dependencia Poetry sin version exacta. Riesgo alto de supply chain y builds no reproducibles. Fije una version especifica y valide su origen: {name}", "vulnerability", "python", name, version)
                               elif version.startswith(("^", "~")) or any(op in version for op in [">=", "<=", ">", "<", "!="]):
-                                  add("MEDIUM", "PYTHON_DEPENDENCY_NOT_EXACT_PIN", path, line, f"Dependencia Poetry con rango o especificador no deterministico. Riesgo alto: puede resolver versiones no verificadas. Reemplace el rango por una version exacta validada: {name} = {version}", "hygiene", "python", name, version)
+                                  add("MEDIUM", "PYTHON_DEPENDENCY_NOT_EXACT_PIN", path, line, f"Dependencia Poetry con rango o especificador no deterministico. Riesgo alto: puede resolver versiones no verificadas. Reemplace el rango por una version exacta validada en formato MAJOR.MINOR.PATCH: {name} = {version}", "hygiene", "python", name, version)
+                              elif not re.match(r"^\d+\.\d+\.\d+([a-zA-Z0-9_.!+-]+)?$", version):
+                                  add("MEDIUM", "PYTHON_DEPENDENCY_INCOMPLETE_VERSION", path, line, f"Dependencia Poetry con version incompleta. La politica exige formato MAJOR.MINOR.PATCH, por ejemplo 0.12.5: {name} = {version}", "hygiene", "python", name, version)
               pdm = tool.get("pdm", {}) if isinstance(tool, dict) else {}
               if isinstance(pdm, dict):
                   dev_deps = pdm.get("dev-dependencies", {})
@@ -200,7 +207,7 @@ jobs:
                           if isinstance(dep, str):
                               check_python_req(path, line_of(path, dep), dep, f"dependency-groups.{group}")
 
-          for dep_file in ["poetry.lock", "Pipfile", "Pipfile.lock", "pdm.lock", "uv.lock", "setup.cfg", "https://urldefense.com/v3/__http://setup.py__;!!P110LumUDw!94XyBMn9RyiEyfa2uB1J-zEqMM2ZwxawjK7pI-dE4ocyK1SqNbwcWnEPun5ihMaB5BwFIVAtchftlu24Bl84MyZK2Kgs0Q$ ", "tox.ini", "environment.yml", "environment.yaml", "conda.yml", "conda.yaml"]:
+          for dep_file in ["poetry.lock", "Pipfile", "Pipfile.lock", "pdm.lock", "uv.lock", "setup.cfg", "https://urldefense.com/v3/__http://setup.py__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5eHRa-LdA$ ", "tox.ini", "environment.yml", "environment.yaml", "conda.yml", "conda.yaml"]:
               for path in sorted(pathlib.Path(".").rglob(dep_file)):
                   if not skip(path) and path.is_file():
                       add("INFO", "PYTHON_DEPENDENCY_FILE_DETECTED", path, 1, f"Archivo de dependencias Python detectado. Riesgo alto si queda fuera del inventario SCA. Incluyalo en el control de supply chain y trazabilidad: {path}", "hygiene", "python")
@@ -660,12 +667,12 @@ jobs:
             - id: web-python-flask-public-host
               languages: [python]
               severity: WARNING
-              message: "Flask app is exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!94XyBMn9RyiEyfa2uB1J-zEqMM2ZwxawjK7pI-dE4ocyK1SqNbwcWnEPun5ihMaB5BwFIVAtchftlu24Bl84MyaLQQr3Ow$ . Confirm network controls, authentication and production WSGI deployment."
+              message: "Flask app is exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ . Confirm network controls, authentication and production WSGI deployment."
               pattern-either:
-                - pattern: app.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!94XyBMn9RyiEyfa2uB1J-zEqMM2ZwxawjK7pI-dE4ocyK1SqNbwcWnEPun5ihMaB5BwFIVAtchftlu24Bl84MyaLQQr3Ow$ ", ...)
-                - pattern: app.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!94XyBMn9RyiEyfa2uB1J-zEqMM2ZwxawjK7pI-dE4ocyK1SqNbwcWnEPun5ihMaB5BwFIVAtchftlu24Bl84MyaLQQr3Ow$ ", ...)
-                - pattern: $APP.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!94XyBMn9RyiEyfa2uB1J-zEqMM2ZwxawjK7pI-dE4ocyK1SqNbwcWnEPun5ihMaB5BwFIVAtchftlu24Bl84MyaLQQr3Ow$ ", ...)
-                - pattern: $APP.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!94XyBMn9RyiEyfa2uB1J-zEqMM2ZwxawjK7pI-dE4ocyK1SqNbwcWnEPun5ihMaB5BwFIVAtchftlu24Bl84MyaLQQr3Ow$ ", ...)
+                - pattern: app.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ ", ...)
+                - pattern: app.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ ", ...)
+                - pattern: $APP.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ ", ...)
+                - pattern: $APP.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ ", ...)
             - id: web-python-route-long-sleep-dos
               languages: [python]
               severity: WARNING
@@ -1338,6 +1345,7 @@ jobs:
           python3 - <<'PY'
           import json
           import pathlib
+          import re
 
           root = pathlib.Path("all_scan_results")
           outdir = pathlib.Path("central-security-report")
@@ -1364,16 +1372,19 @@ jobs:
           def add(cat, sev, tool, loc, detail, rule="", source="", fp_note=""):
               if is_excluded_workflow(loc) or is_excluded_workflow(detail) or is_excluded_workflow(source):
                   return
-              item={"category":cat,"severity":force_dependency_severity(cat, sev),"tool":tool,"location":loc or "?:?","detail":str(detail or "").replace("\n"," ")[:3000],"rule":rule or "","source":source or "","fp_note":fp_note or ""}
-              dup = None
-              for i, x in enumerate(findings):
-                  if x["location"] == item["location"] and x["rule"] == item["rule"]:
-                      dup = i
-                      break
-              if dup is None:
-                  findings.append(item)
-              elif len(item["detail"]) > len(findings[dup]["detail"]):
-                  findings[dup] = item
+              item = {
+                  "category": cat,
+                  "severity": force_dependency_severity(cat, sev),
+                  "tool": tool,
+                  "location": loc or "?:?",
+                  "detail": str(detail or "").replace("\n", " ")[:3000],
+                  "rule": rule or "",
+                  "source": source or "",
+                  "fp_note": fp_note or "",
+                  "tools": [tool],
+                  "sources": [source] if source else []
+              }
+              findings.append(item)
           def load_all(name):
               matched = False
               for path in root.rglob(name):
@@ -1503,7 +1514,172 @@ jobs:
                   quality.append(item)
               tool_status.append({"artifact": str(path), "tool": "Ruff", "findings": count, "type": "quality"})
 
-          cats = sorted(set([item["category"] for item in findings]) | {"AI / LLM / Agentic", "Codigo aplicativo", "Dependencias / SCA", "Dependencias / SCA", "Secretos", "Docker / Contenedores", "IaC / Cloud / Config", "Pipeline / Parser"})
+          recommendation_by_category = {
+              "AI / LLM / Agentic": [
+                  "Implementar defensas contra prompt injection: separacion estricta de instrucciones del sistema, delimitacion de contexto, validacion de entrada y filtros de salida.",
+                  "Aplicar autorizacion sobre documentos y datos recuperados antes de entregarlos al modelo.",
+                  "Definir limites de costo, rate limiting, monitoreo y logging seguro para llamadas a proveedores de IA."
+              ],
+              "Dependencias / SCA": [
+                  "Fijar versiones exactas en formato MAJOR.MINOR.PATCH, por ejemplo 0.12.5.",
+                  "Regenerar lockfiles y validar que las dependencias provengan de registros confiables.",
+                  "Actualizar dependencias vulnerables a versiones corregidas y mantener inventario completo de dependencias directas y transitivas."
+              ],
+              "Codigo aplicativo": [
+                  "Corregir el flujo vulnerable en origen, no solo mediante validaciones superficiales.",
+                  "Agregar pruebas de seguridad para cubrir la ruta vulnerable y prevenir regresiones.",
+                  "Validar entrada, aplicar codificacion de salida y evitar ejecucion de comandos o HTML no confiable."
+              ],
+              "Docker / Contenedores": [
+                  "Construir imagenes reproducibles y minimizadas.",
+                  "Ejecutar contenedores con usuario no privilegiado, versiones fijadas y controles de salud cuando corresponda.",
+                  "Reducir superficie de ataque eliminando paquetes innecesarios y configuraciones inseguras."
+              ],
+              "IaC / Cloud / Config": [
+                  "Aplicar minimo privilegio y configuraciones seguras por defecto.",
+                  "Evitar exposicion publica innecesaria y cifrar recursos sensibles.",
+                  "Corregir desviaciones antes de promover infraestructura a ambientes superiores."
+              ],
+              "Secretos": [
+                  "Revocar inmediatamente el secreto expuesto.",
+                  "Rotar credenciales y eliminar el secreto del historial cuando corresponda.",
+                  "Usar un gestor de secretos y controles preventivos en pre-commit o CI."
+              ]
+          }
+
+          tool_priority = {
+              "CodeQL": 100,
+              "Semgrep AI": 95,
+              "Semgrep OSS": 90,
+              "AI/App Static Analyzer": 85,
+              "Trivy": 80,
+              "Gitleaks": 78,
+              "Checkov": 70,
+              "Hadolint": 65,
+              "Dependency Policy": 60,
+              "pip-audit": 60,
+              "Report parser": 10
+          }
+
+          severity_rank = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "UNKNOWN": 0}
+
+          def split_loc(loc):
+              loc = str(loc or "?:?")
+              if ":" not in loc:
+                  return loc, 1
+              file_part, line_part = loc.rsplit(":", 1)
+              try:
+                  return file_part, int(line_part)
+              except Exception:
+                  return file_part, 1
+
+          def normalize_rule_family(rule, detail, category):
+              text_rule = f"{rule} {detail}".lower()
+              if "prompt injection" in text_rule or "llm" in text_rule or " rag" in text_rule or "retrievalqa" in text_rule:
+                  return "AI_PROMPT_OR_RAG_RISK"
+              if "xss" in text_rule or "<script>" in text_rule or "innerhtml" in text_rule or "html" in text_rule:
+                  return "WEB_XSS_RISK"
+              if "shell=true" in text_rule or "command" in text_rule or "subprocess" in text_rule or "exec" in text_rule:
+                  return "COMMAND_EXECUTION_RISK"
+              if "secret" in text_rule or "credential" in text_rule or "token" in text_rule:
+                  return "SECRET_EXPOSURE"
+              if category == "Dependencias / SCA":
+                  return str(rule or "DEPENDENCY").upper()
+              if category == "Docker / Contenedores":
+                  return str(rule or "DOCKER_SECURITY_RISK").upper()
+              if category == "IaC / Cloud / Config":
+                  return str(rule or "IAC_SECURITY_RISK").upper()
+              return str(rule or "GENERIC").lower().split(".")[-1].replace("-", "_")
+
+          def detail_score(item):
+              score = len(item.get("detail", ""))
+              score += tool_priority.get(item.get("tool", ""), 0) * 10
+              score += severity_rank.get(item.get("severity", "UNKNOWN"), 0) * 100
+              if item.get("location", "?:?") != "?:?":
+                  score += 150
+              if "Recomendacion:" in item.get("detail", ""):
+                  score += 80
+              return score
+
+          def same_package_dependency(a, b):
+              da = str(a.get("detail", "")).lower()
+              db = str(b.get("detail", "")).lower()
+              ids_a = set(re.findall(r"(CVE-\d{4}-\d+|GHSA-[a-z0-9-]+|PYSEC-\d{4}-\d+)", da, flags=re.I))
+              ids_b = set(re.findall(r"(CVE-\d{4}-\d+|GHSA-[a-z0-9-]+|PYSEC-\d{4}-\d+)", db, flags=re.I))
+              if ids_a and ids_b:
+                  return bool(ids_a & ids_b)
+              return False
+
+          def should_merge(a, b):
+              file_a, line_a = split_loc(a.get("location"))
+              file_b, line_b = split_loc(b.get("location"))
+              if file_a != file_b:
+                  return False
+
+              cat_a = a.get("category")
+              cat_b = b.get("category")
+              if cat_a != cat_b:
+                  return False
+
+              rule_a = normalize_rule_family(a.get("rule"), a.get("detail"), cat_a)
+              rule_b = normalize_rule_family(b.get("rule"), b.get("detail"), cat_b)
+
+              if cat_a == "Dependencias / SCA":
+                  if same_package_dependency(a, b):
+                      return True
+                  return rule_a == rule_b and int(line_a or 1) == int(line_b or 1)
+
+              if cat_a == "Secretos":
+                  return rule_a == rule_b and int(line_a or 1) == int(line_b or 1)
+
+              if cat_a in {"Docker / Contenedores", "IaC / Cloud / Config"}:
+                  tools_pair = {str(a.get("tool", "")), str(b.get("tool", ""))}
+                  same_or_near_line = abs(int(line_a or 1) - int(line_b or 1)) <= 1
+
+                  # Trivy y Checkov suelen reportar la misma mala configuracion con reglas distintas.
+                  # Para evitar duplicados, si apuntan al mismo archivo y linea cercana, se fusionan.
+                  if tools_pair == {"Trivy", "Checkov"} and same_or_near_line:
+                      return True
+
+                  # Entre otras herramientas Docker/IaC, fusionar solo misma regla/familia y misma linea.
+                  return rule_a == rule_b and int(line_a or 1) == int(line_b or 1)
+
+              return rule_a == rule_b and abs(int(line_a or 1) - int(line_b or 1)) <= 1
+
+          deduped = []
+          for item in findings:
+              item.setdefault("tools", [item.get("tool")])
+              item.setdefault("sources", [item.get("source")] if item.get("source") else [])
+              merged = False
+
+              for existing in deduped:
+                  if should_merge(item, existing):
+                      existing_tools = set(existing.get("tools", [existing.get("tool")]))
+                      if item.get("tool"):
+                          existing_tools.add(item.get("tool"))
+                      existing["tools"] = sorted(existing_tools)
+
+                      existing_sources = set(existing.get("sources", []))
+                      if item.get("source"):
+                          existing_sources.add(item.get("source"))
+                      existing["sources"] = sorted(existing_sources)
+
+                      if detail_score(item) > detail_score(existing):
+                          keep_tools = existing["tools"]
+                          keep_sources = existing["sources"]
+                          item["tools"] = keep_tools
+                          item["sources"] = keep_sources
+                          existing.update(item)
+
+                      merged = True
+                      break
+
+              if not merged:
+                  deduped.append(item)
+
+          findings = deduped
+
+          cats = sorted(set([item["category"] for item in findings]) | {"AI / LLM / Agentic", "Codigo aplicativo", "Dependencias / SCA", "Secretos", "Docker / Contenedores", "IaC / Cloud / Config"})
           sevs = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"]
           table = {cat: {sev: 0 for sev in sevs} for cat in cats}
           for item in findings:
@@ -1511,7 +1687,7 @@ jobs:
               table[item["category"]][sev] += 1
 
           order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4, "UNKNOWN": 5}
-          findings.sort(key=lambda item: (order.get(item["severity"], 99), item["category"], item["tool"], item["location"]))
+          findings.sort(key=lambda item: (item["category"], order.get(item["severity"], 99), item["location"], item["rule"]))
 
           lines = []
           lines.append("REPORTE CENTRALIZADO DE SEGURIDAD")
@@ -1519,7 +1695,7 @@ jobs:
           lines.append("")
           lines.append("RESUMEN EJECUTIVO")
           lines.append("-" * 90)
-          lines.append(f"Hallazgos totales             : {len(findings)}")
+          lines.append(f"Hallazgos unicos              : {len(findings)}")
           lines.append(f"Criticas + Altas              : {len([item for item in findings if item['severity'] in {'CRITICAL','HIGH'}])}")
           lines.append(f"Hallazgos de calidad Ruff     : {len(quality)}")
           lines.append("")
@@ -1533,21 +1709,47 @@ jobs:
           lines.append(f"{'Categoria':35} {'CRITICAL':>8} {'HIGH':>5} {'MEDIUM':>7} {'LOW':>5} {'INFO':>5} {'UNKNOWN':>8}")
           for cat in cats:
               lines.append(f"{cat:35} {table[cat]['CRITICAL']:>8} {table[cat]['HIGH']:>5} {table[cat]['MEDIUM']:>7} {table[cat]['LOW']:>5} {table[cat]['INFO']:>5} {table[cat]['UNKNOWN']:>8}")
+
           lines.append("")
-          lines.append("TODOS LOS HALLAZGOS ORDENADOS POR CRITICIDAD")
+          lines.append("HALLAZGOS POR CATEGORIA")
           lines.append("=" * 90)
           if not findings:
               lines.append("Sin hallazgos.")
           else:
-              for i, item in enumerate(findings, 1):
+              idx = 1
+              for cat in cats:
+                  cat_findings = [item for item in findings if item["category"] == cat]
+                  if not cat_findings:
+                      continue
                   lines.append("")
-                  lines.append(f"{i}. [{item['severity']}] [{item['category']}] {item['rule']}")
-                  lines.append(f"   Herramienta : {item['tool']}")
-                  lines.append(f"   Linea/Error : {item['location']}")
-                  lines.append(f"   Detalle     : {item['detail']}")
-                  if item.get("fp_note"):
-                      lines.append(f"   Nota FP     : {item['fp_note']}")
-                  lines.append(f"   Fuente      : {item['source']}")
+                  lines.append(cat.upper())
+                  lines.append("-" * 90)
+
+                  for item in cat_findings:
+                      tools = item.get("tools") or [item.get("tool")]
+                      tools = [t for t in tools if t]
+                      main_tool = item.get("tool") or (tools[0] if tools else "No disponible")
+                      other_tools = [t for t in tools if t != main_tool]
+
+                      lines.append("")
+                      lines.append(f"{idx}. [{item['severity']}] {item['rule']}")
+                      lines.append(f"   Herramienta principal : {main_tool}")
+                      lines.append(f"   Ubicacion             : {item['location']}")
+                      lines.append(f"   Detalle               : {item['detail']}")
+                      if item.get("fp_note"):
+                          lines.append(f"   Nota                  : {item['fp_note']}")
+                      if item.get("sources"):
+                          lines.append(f"   Fuentes del hallazgo  : {', '.join(item.get('sources', []))}")
+                      elif item.get("source"):
+                          lines.append(f"   Fuente del hallazgo   : {item['source']}")
+                      idx += 1
+
+                  recs = recommendation_by_category.get(cat, [])
+                  if recs:
+                      lines.append("")
+                      lines.append("Recomendaciones para la categoria:")
+                      for rec in recs:
+                          lines.append(f"   - {rec}")
 
           lines.append("")
           lines.append("CALIDAD DE DESARROLLO / RUFF")
