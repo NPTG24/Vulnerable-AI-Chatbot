@@ -134,7 +134,7 @@ jobs:
               if skip(path) or not path.is_file():
                   continue
               n = path.name.lower()
-              if n in {"requirements.txt", "requirements-dev.txt", "requirements-test.txt", "requirements-prod.txt", "requirements-production.txt", "https://urldefense.com/v3/__http://requirements.in__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5dRu208Ag$ ", "constraints.txt", "dev-requirements.txt", "test-requirements.txt", "prod-requirements.txt"} or (n.startswith("requirements") and n.endswith((".txt", ".in", ".pip"))):
+              if n in {"requirements.txt", "requirements-dev.txt", "requirements-test.txt", "requirements-prod.txt", "requirements-production.txt", "https://urldefense.com/v3/__http://requirements.in__;!!P110LumUDw!6qLRXE3ihCI_FxY9gCHuV2_kLJ_yCUwoYW1tRQtZWe9lK9KRsd5L6TExnMIKDaVboS27naUza-JV9GcoSd5I0XbjBUAiKA$ ", "constraints.txt", "dev-requirements.txt", "test-requirements.txt", "prod-requirements.txt"} or (n.startswith("requirements") and n.endswith((".txt", ".in", ".pip"))):
                   python_dependency_files_found += 1
                   raw_lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
                   useful_lines = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith("#")]
@@ -207,7 +207,7 @@ jobs:
                           if isinstance(dep, str):
                               check_python_req(path, line_of(path, dep), dep, f"dependency-groups.{group}")
 
-          for dep_file in ["poetry.lock", "Pipfile", "Pipfile.lock", "pdm.lock", "uv.lock", "setup.cfg", "https://urldefense.com/v3/__http://setup.py__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5eHRa-LdA$ ", "tox.ini", "environment.yml", "environment.yaml", "conda.yml", "conda.yaml"]:
+          for dep_file in ["poetry.lock", "Pipfile", "Pipfile.lock", "pdm.lock", "uv.lock", "setup.cfg", "https://urldefense.com/v3/__http://setup.py__;!!P110LumUDw!6qLRXE3ihCI_FxY9gCHuV2_kLJ_yCUwoYW1tRQtZWe9lK9KRsd5L6TExnMIKDaVboS27naUza-JV9GcoSd5I0XYIah_JAA$ ", "tox.ini", "environment.yml", "environment.yaml", "conda.yml", "conda.yaml"]:
               for path in sorted(pathlib.Path(".").rglob(dep_file)):
                   if not skip(path) and path.is_file():
                       add("INFO", "PYTHON_DEPENDENCY_FILE_DETECTED", path, 1, f"Archivo de dependencias Python detectado. Riesgo alto si queda fuera del inventario SCA. Incluyalo en el control de supply chain y trazabilidad: {path}", "hygiene", "python")
@@ -667,12 +667,12 @@ jobs:
             - id: web-python-flask-public-host
               languages: [python]
               severity: WARNING
-              message: "Flask app is exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ . Confirm network controls, authentication and production WSGI deployment."
+              message: "Flask app is exposed on https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!6qLRXE3ihCI_FxY9gCHuV2_kLJ_yCUwoYW1tRQtZWe9lK9KRsd5L6TExnMIKDaVboS27naUza-JV9GcoSd5I0Xb2mPQYbQ$ . Confirm network controls, authentication and production WSGI deployment."
               pattern-either:
-                - pattern: app.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ ", ...)
-                - pattern: app.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ ", ...)
-                - pattern: $APP.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ ", ...)
-                - pattern: $APP.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!8Lx0TQVOEfys0bHK0j2LiPcLMRYPkaCJR38SyvVXs5fTuJU2ENFwvTfMh6TA9IX8KTcwIO409mjufa1EPz48A5clmrNIPg$ ", ...)
+                - pattern: app.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!6qLRXE3ihCI_FxY9gCHuV2_kLJ_yCUwoYW1tRQtZWe9lK9KRsd5L6TExnMIKDaVboS27naUza-JV9GcoSd5I0Xb2mPQYbQ$ ", ...)
+                - pattern: app.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!6qLRXE3ihCI_FxY9gCHuV2_kLJ_yCUwoYW1tRQtZWe9lK9KRsd5L6TExnMIKDaVboS27naUza-JV9GcoSd5I0Xb2mPQYbQ$ ", ...)
+                - pattern: $APP.run("https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!6qLRXE3ihCI_FxY9gCHuV2_kLJ_yCUwoYW1tRQtZWe9lK9KRsd5L6TExnMIKDaVboS27naUza-JV9GcoSd5I0Xb2mPQYbQ$ ", ...)
+                - pattern: $APP.run(host="https://urldefense.com/v3/__http://0.0.0.0__;!!P110LumUDw!6qLRXE3ihCI_FxY9gCHuV2_kLJ_yCUwoYW1tRQtZWe9lK9KRsd5L6TExnMIKDaVboS27naUza-JV9GcoSd5I0Xb2mPQYbQ$ ", ...)
             - id: web-python-route-long-sleep-dos
               languages: [python]
               severity: WARNING
@@ -874,6 +874,89 @@ jobs:
             .semgrep/ai-security/ai_rules.yml
           retention-days: 30
 
+  dojigiri-ai-security:
+    name: "AI Security - Dojigiri optional"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Dojigiri if available
+        continue-on-error: true
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          # Dojigiri is installed opportunistically. If the package name or registry changes,
+          # the job still produces empty artifacts and does not break the pipeline.
+          pip install dojigiri || true
+
+      - name: Run Dojigiri AI/LLM scan
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo '{"tool":"Dojigiri","findings":[]}' > dojigiri_results.json
+          echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Dojigiri","rules":[]}},"results":[]}]}' > dojigiri.sarif
+          echo "Dojigiri status: not executed" > dojigiri_status.txt
+
+          if command -v dojigiri >/dev/null 2>&1; then
+            echo "Dojigiri status: CLI found" > dojigiri_status.txt
+
+            # Try common CI-friendly variants. The first successful one keeps its output.
+            dojigiri scan . --format json --output dojigiri_results.json || \
+            dojigiri scan . --json --output dojigiri_results.json || \
+            dojigiri . --format json --output dojigiri_results.json || \
+            true
+
+            dojigiri scan . --format sarif --output dojigiri.sarif || \
+            dojigiri scan . --sarif --output dojigiri.sarif || \
+            dojigiri . --format sarif --output dojigiri.sarif || \
+            true
+          else
+            echo "Dojigiri status: CLI not available after pip install" > dojigiri_status.txt
+          fi
+
+          # Normalize artifacts if the tool returned empty/invalid output.
+          python3 - <<'PY'
+          import json
+          import pathlib
+
+          def valid_json(path):
+              try:
+                  text = pathlib.Path(path).read_text(encoding="utf-8", errors="ignore").strip()
+                  if not text:
+                      return False
+                  json.loads(text)
+                  return True
+              except Exception:
+                  return False
+
+          if not valid_json("dojigiri_results.json"):
+              pathlib.Path("dojigiri_results.json").write_text('{"tool":"Dojigiri","findings":[]}', encoding="utf-8")
+
+          if not valid_json("dojigiri.sarif"):
+              pathlib.Path("dojigiri.sarif").write_text('{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Dojigiri","rules":[]}},"results":[]}]}', encoding="utf-8")
+          PY
+
+      - name: Upload Dojigiri SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: dojigiri.sarif
+          category: dojigiri-ai-security
+
+      - name: Upload Dojigiri artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dojigiri-ai-security-results
+          path: |
+            dojigiri_results.json
+            dojigiri.sarif
+            dojigiri_status.txt
+          retention-days: 30
+
   sca:
     name: "SCA - pip-audit + Trivy"
     runs-on: ubuntu-latest
@@ -901,166 +984,111 @@ jobs:
             pip-audit --format json --output pip_audit_osv.json --progress-spinner off --vulnerability-service osv || true
           fi
           echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"pip-audit","rules":[]}},"results":[]}]}' > pip_audit.sarif
-      - name: Run Trivy filesystem JSON and SARIF
+      - name: Run Trivy SCA only JSON and SARIF
         continue-on-error: true
         shell: bash
         run: |
-          docker run --rm --user "$(id -u):$(id -g)" -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$PWD:/repo" aquasec/trivy:latest fs --scanners vuln,secret,misconfig --format json --output /repo/trivy_results_raw.json --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --skip-dirs /repo/.git --skip-dirs /repo/node_modules --skip-dirs /repo/.github --skip-files /repo/.github/workflows/security.yml /repo || true
-          docker run --rm --user "$(id -u):$(id -g)" -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$PWD:/repo" aquasec/trivy:latest fs --scanners vuln,secret,misconfig --format sarif --output /repo/trivy_results_raw.sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --skip-dirs /repo/.git --skip-dirs /repo/node_modules --skip-dirs /repo/.github --skip-files /repo/.github/workflows/security.yml /repo || true
+          # Trivy queda dedicado a SCA/CVEs, secretos y licencias.
+          # No ejecuta scanners config/misconfig para evitar duplicados con Checkov.
+          docker run --rm --user "$(id -u):$(id -g)" -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$PWD:/repo" aquasec/trivy:latest fs --scanners vuln,secret,license --format json --output /repo/trivy_fs_results_raw.json --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --skip-dirs /repo/.git --skip-dirs /repo/node_modules --skip-dirs /repo/.github --skip-files /repo/.github/workflows/security.yml /repo || true
+          docker run --rm --user "$(id -u):$(id -g)" -e TRIVY_CACHE_DIR=/tmp/trivy-cache -v "$PWD:/repo" aquasec/trivy:latest fs --scanners vuln,secret,license --format sarif --output /repo/trivy_fs_results_raw.sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --skip-dirs /repo/.git --skip-dirs /repo/node_modules --skip-dirs /repo/.github --skip-files /repo/.github/workflows/security.yml /repo || true
+
+          echo '{"Results":[]}' > trivy_image_results_raw.json
+          echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy Image","rules":[]}},"results":[]}]}' > trivy_image_results_raw.sarif
+
+          if [ -f Dockerfile ]; then
+            docker build -t appsec-image:latest . || true
+            if docker image inspect appsec-image:latest >/dev/null 2>&1; then
+              docker run --rm --user "$(id -u):$(id -g)" -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/repo" aquasec/trivy:latest image --scanners vuln --format json --output /repo/trivy_image_results_raw.json --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL appsec-image:latest || true
+              docker run --rm --user "$(id -u):$(id -g)" -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/repo" aquasec/trivy:latest image --scanners vuln --format sarif --output /repo/trivy_image_results_raw.sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL appsec-image:latest || true
+            fi
+          fi
 
           python3 - <<'PY'
           import json
           import pathlib
-          import re
 
-          raw_json = pathlib.Path("trivy_results_raw.json")
-          out_json = pathlib.Path("trivy_results.json")
-          raw_sarif = pathlib.Path("trivy_results_raw.sarif")
-          out_sarif = pathlib.Path("trivy_results.sarif")
+          repo = pathlib.Path('.').resolve()
 
           def read_json(path, fallback):
               try:
-                  return json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+                  return json.loads(pathlib.Path(path).read_text(encoding='utf-8', errors='ignore'))
               except Exception:
                   return fallback
 
-          data = read_json(raw_json, {"Results": []})
-
-          repo = pathlib.Path(".").resolve()
-
           def clean_target(target):
-              target = str(target or "").replace("\\", "/")
-              target = target.replace("/repo/", "").lstrip("/")
-              if target in {".", ""}:
-                  return ""
-              return target
+              target = str(target or '').replace('\\\\', '/')
+              target = target.replace('/repo/', '').lstrip('/')
+              return '' if target in {'.', ''} else target
 
           def find_line_in_file(file_path, patterns):
               try:
-                  lines = pathlib.Path(file_path).read_text(encoding="utf-8", errors="ignore").splitlines()
+                  lines = pathlib.Path(file_path).read_text(encoding='utf-8', errors='ignore').splitlines()
               except Exception:
                   return 1
-
-              pats = [p for p in patterns if p]
+              pats = [str(p) for p in patterns if p]
               for idx, line in enumerate(lines, 1):
                   for pat in pats:
                       if pat and pat in line:
                           return idx
-
-              lowered = [(p or "").lower() for p in pats]
+              lowered = [p.lower() for p in pats]
               for idx, line in enumerate(lines, 1):
                   low = line.lower()
                   for pat in lowered:
                       if pat and pat in low:
                           return idx
-
               return 1
 
           def resolve_line(target, item, kind):
               target_clean = clean_target(target)
-
-              # Trivy misconfig often includes CauseMetadata with StartLine/EndLine.
-              cause = item.get("CauseMetadata") or {}
-              for key in ["StartLine", "Line", "EndLine"]:
-                  value = cause.get(key)
-                  if isinstance(value, int) and value > 0:
-                      return value
-
-              # Trivy secret often includes StartLine/EndLine.
-              for key in ["StartLine", "Line", "EndLine"]:
+              for key in ['StartLine', 'Line', 'EndLine']:
                   value = item.get(key)
                   if isinstance(value, int) and value > 0:
                       return value
-
               candidates = []
-              if target_clean:
-                  candidates.append(target_clean)
-
-              # Vulnerabilities in lockfiles usually only provide package name.
-              if kind == "vulnerability":
-                  candidates += [
-                      item.get("PkgName", ""),
-                      item.get("Name", ""),
-                      item.get("VulnerabilityID", ""),
-                  ]
-
-              if kind == "secret":
-                  candidates += [
-                      item.get("RuleID", ""),
-                      item.get("Title", ""),
-                      item.get("Match", ""),
-                  ]
-
-              if kind == "misconfig":
-                  candidates += [
-                      item.get("ID", ""),
-                      item.get("AVDID", ""),
-                      item.get("Title", ""),
-                  ]
-
+              if kind == 'vulnerability':
+                  candidates += [item.get('PkgName', ''), item.get('Name', ''), item.get('VulnerabilityID', '')]
+              elif kind == 'secret':
+                  candidates += [item.get('RuleID', ''), item.get('Title', ''), item.get('Match', '')]
               file_path = repo / target_clean if target_clean else None
               if file_path and file_path.exists() and file_path.is_file():
                   return find_line_in_file(file_path, candidates)
-
               return 1
 
-          for result in data.get("Results", []) if isinstance(data, dict) else []:
-              target = result.get("Target", "")
-              for vuln in result.get("Vulnerabilities", []) or []:
-                  line = resolve_line(target, vuln, "vulnerability")
-                  vuln["StartLine"] = line
-                  vuln["Line"] = line
-                  vuln["Location"] = f"{clean_target(target)}:{line}"
-              for secret in result.get("Secrets", []) or []:
-                  line = resolve_line(target, secret, "secret")
-                  secret["StartLine"] = line
-                  secret["Line"] = line
-                  secret["Location"] = f"{clean_target(target)}:{line}"
-              for misconf in result.get("Misconfigurations", []) or []:
-                  line = resolve_line(target, misconf, "misconfig")
-                  misconf["StartLine"] = line
-                  misconf["Line"] = line
-                  misconf["Location"] = f"{clean_target(target)}:{line}"
+          def enrich_json(in_path, out_path, source_name):
+              data = read_json(in_path, {'Results': []})
+              for result in data.get('Results', []) if isinstance(data, dict) else []:
+                  result.pop('Misconfigurations_DISABLED', None)
+                  target = result.get('Target', '')
+                  for vuln in result.get('Vulnerabilities', []) or []:
+                      line = resolve_line(target, vuln, 'vulnerability')
+                      vuln['StartLine'] = line
+                      vuln['Line'] = line
+                      vuln['Location'] = f"{clean_target(target)}:{line}"
+                      vuln['TrivySource'] = source_name
+                  for secret in result.get('Secrets', []) or []:
+                      line = resolve_line(target, secret, 'secret')
+                      secret['StartLine'] = line
+                      secret['Line'] = line
+                      secret['Location'] = f"{clean_target(target)}:{line}"
+                      secret['TrivySource'] = source_name
+              pathlib.Path(out_path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+              return data
 
-          out_json.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+          fs_data = enrich_json('trivy_fs_results_raw.json', 'trivy_fs_results.json', 'filesystem')
+          image_data = enrich_json('trivy_image_results_raw.json', 'trivy_image_results.json', 'image')
 
-          sarif = read_json(raw_sarif, {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "Trivy", "rules": []}}, "results": []}]})
-          # Si Trivy SARIF no trae linea, se corrige usando el JSON enriquecido.
-          line_by_rule_target = {}
-          for result in data.get("Results", []) if isinstance(data, dict) else []:
-              target = clean_target(result.get("Target", ""))
-              for vuln in result.get("Vulnerabilities", []) or []:
-                  rid = vuln.get("VulnerabilityID", "")
-                  if rid:
-                      line_by_rule_target[(rid, target)] = vuln.get("StartLine", 1)
-              for secret in result.get("Secrets", []) or []:
-                  rid = secret.get("RuleID", "")
-                  if rid:
-                      line_by_rule_target[(rid, target)] = secret.get("StartLine", 1)
-              for misconf in result.get("Misconfigurations", []) or []:
-                  rid = misconf.get("ID", "") or misconf.get("AVDID", "")
-                  if rid:
-                      line_by_rule_target[(rid, target)] = misconf.get("StartLine", 1)
+          combined = {'Results': []}
+          for data in [fs_data, image_data]:
+              for result in data.get('Results', []) if isinstance(data, dict) else []:
+                  result.pop('Misconfigurations_DISABLED', None)
+                  combined['Results'].append(result)
 
-          for run in sarif.get("runs", []) if isinstance(sarif, dict) else []:
-              for res in run.get("results", []) or []:
-                  rid = res.get("ruleId", "")
-                  for loc in res.get("locations", []) or []:
-                      phys = loc.setdefault("physicalLocation", {})
-                      art = phys.setdefault("artifactLocation", {})
-                      uri = clean_target(art.get("uri", ""))
-                      line = line_by_rule_target.get((rid, uri), None)
-                      if not line:
-                          # fallback: same rule in any file
-                          for (r, _t), l in line_by_rule_target.items():
-                              if r == rid:
-                                  line = l
-                                  break
-                      region = phys.setdefault("region", {})
-                      if not region.get("startLine") or region.get("startLine") == 0:
-                          region["startLine"] = int(line or 1)
+          pathlib.Path('trivy_results.json').write_text(json.dumps(combined, indent=2, ensure_ascii=False), encoding='utf-8')
 
-          out_sarif.write_text(json.dumps(sarif, indent=2, ensure_ascii=False), encoding="utf-8")
+          # SARIF principal para GitHub Security: filesystem SCA. Image queda como artefacto adicional.
+          fs_sarif = read_json('trivy_fs_results_raw.sarif', {'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'Trivy FS', 'rules': []}}, 'results': []}]})
+          pathlib.Path('trivy_results.sarif').write_text(json.dumps(fs_sarif, indent=2, ensure_ascii=False), encoding='utf-8')
           PY
       - name: Ensure SCA artifacts exist
         if: always()
@@ -1069,8 +1097,12 @@ jobs:
           test -f pip_audit_results.json || echo '{"dependencies":[]}' > pip_audit_results.json
           test -f pip_audit_osv.json || echo '{"dependencies":[]}' > pip_audit_osv.json
           test -f pip_audit.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"pip-audit","rules":[]}},"results":[]}]}' > pip_audit.sarif
-          test -f trivy_results_raw.json || echo '{"Results":[]}' > trivy_results_raw.json
-          test -f trivy_results_raw.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy","rules":[]}},"results":[]}]}' > trivy_results_raw.sarif
+          test -f trivy_fs_results_raw.json || echo '{"Results":[]}' > trivy_fs_results_raw.json
+          test -f trivy_fs_results_raw.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy FS","rules":[]}},"results":[]}]}' > trivy_fs_results_raw.sarif
+          test -f trivy_image_results_raw.json || echo '{"Results":[]}' > trivy_image_results_raw.json
+          test -f trivy_image_results_raw.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy Image","rules":[]}},"results":[]}]}' > trivy_image_results_raw.sarif
+          test -f trivy_fs_results.json || echo '{"Results":[]}' > trivy_fs_results.json
+          test -f trivy_image_results.json || echo '{"Results":[]}' > trivy_image_results.json
           test -f trivy_results.json || echo '{"Results":[]}' > trivy_results.json
           test -f trivy_results.sarif || echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy","rules":[]}},"results":[]}]}' > trivy_results.sarif
       - name: Upload pip-audit SARIF
@@ -1096,8 +1128,12 @@ jobs:
             pip_audit_results.json
             pip_audit_osv.json
             pip_audit.sarif
-            trivy_results_raw.json
-            trivy_results_raw.sarif
+            trivy_fs_results_raw.json
+            trivy_fs_results_raw.sarif
+            trivy_image_results_raw.json
+            trivy_image_results_raw.sarif
+            trivy_fs_results.json
+            trivy_image_results.json
             trivy_results.json
             trivy_results.sarif
           retention-days: 30
@@ -1328,6 +1364,7 @@ jobs:
       - codeql
       - semgrep
       - ai-security
+      - dojigiri-ai-security
       - sca
       - secret-scan
       - docker-security
@@ -1405,6 +1442,50 @@ jobs:
                   add(item.get("category", "AI / LLM / Agentic"), item.get("severity", "UNKNOWN"), item.get("tool", "AI/App Static Analyzer"), f"{item.get('file','?')}:{item.get('line','?')}", item.get("message", ""), item.get("rule", ""), str(path), item.get("fp_note", ""))
               tool_status.append({"artifact": str(path), "tool": "AI/App Static Analyzer", "findings": count})
 
+
+          for path, data in load_all("dojigiri_results.json"):
+              count = 0
+              # Supported shapes:
+              # {"findings":[...]} / {"results":[...]} / [...]
+              items = []
+              if isinstance(data, dict):
+                  items = data.get("findings") or data.get("results") or data.get("issues") or []
+              elif isinstance(data, list):
+                  items = data
+
+              for item in items:
+                  if not isinstance(item, dict):
+                      continue
+                  count += 1
+                  rule = item.get("rule") or item.get("rule_id") or item.get("id") or item.get("check_id") or "DOJIGIRI_AI_FINDING"
+                  sev = item.get("severity") or item.get("level") or item.get("impact") or "HIGH"
+                  file_name = item.get("file") or item.get("path") or item.get("filename") or item.get("location", {}).get("path") if isinstance(item.get("location"), dict) else item.get("location") or "?:?"
+                  line = item.get("line") or item.get("start_line") or item.get("lineNumber") or 1
+                  detail = item.get("message") or item.get("description") or item.get("detail") or item.get("title") or "Hallazgo AI/LLM reportado por Dojigiri."
+                  loc = f"{file_name}:{line}" if ":" not in str(file_name) else str(file_name)
+                  add("AI / LLM / Agentic", sev, "Dojigiri", loc, detail, rule, str(path))
+              tool_status.append({"artifact": str(path), "tool": "Dojigiri", "findings": count})
+
+          for path, data in load_all("dojigiri.sarif"):
+              count = 0
+              for run in data.get("runs", []) if isinstance(data, dict) else []:
+                  for result in run.get("results", []) or []:
+                      count += 1
+                      rule = result.get("ruleId", "DOJIGIRI_AI_FINDING")
+                      level = result.get("level", "warning")
+                      sev = "HIGH" if level in {"error", "warning"} else "INFO"
+                      msg = result.get("message", {}).get("text", "Hallazgo AI/LLM reportado por Dojigiri.")
+                      loc = "?:?"
+                      try:
+                          phys = result.get("locations", [{}])[0].get("physicalLocation", {})
+                          uri = phys.get("artifactLocation", {}).get("uri", "?")
+                          line = phys.get("region", {}).get("startLine", 1)
+                          loc = f"{uri}:{line}"
+                      except Exception:
+                          pass
+                      add("AI / LLM / Agentic", sev, "Dojigiri", loc, msg, rule, str(path))
+              tool_status.append({"artifact": str(path), "tool": "Dojigiri SARIF", "findings": count})
+
           for path, data in load_all("semgrep_ai.json"):
               count = 0
               for item in data.get("results", []):
@@ -1464,12 +1545,8 @@ jobs:
                       line = secret.get("StartLine") or secret.get("Line") or 1
                       loc = secret.get("Location") or f"{clean_target}:{line}"
                       add("Secretos", secret.get("Severity", "HIGH"), "Trivy", loc, secret.get("Title", "Possible secret"), secret.get("RuleID", ""), str(path))
-                  for misconf in result.get("Misconfigurations", []) or []:
-                      count += 1
-                      line = misconf.get("StartLine") or misconf.get("Line") or 1
-                      loc = misconf.get("Location") or f"{clean_target}:{line}"
-                      cat = "Docker / Contenedores" if "dockerfile" in str(target).lower() else "IaC / Cloud / Config"
-                      add(cat, misconf.get("Severity", "UNKNOWN"), "Trivy", loc, f"{misconf.get('ID','')} - {misconf.get('Title','')}", misconf.get("ID", ""), str(path))
+                  # Trivy no reporta Misconfigurations_DISABLED en este pipeline.
+                  # Checkov queda como responsable de Dockerfile/IaC/configuracion para evitar duplicados.
               tool_status.append({"artifact": str(path), "tool": "Trivy", "findings": count})
 
           for path, data in load_all("gitleaks_report.json"):
